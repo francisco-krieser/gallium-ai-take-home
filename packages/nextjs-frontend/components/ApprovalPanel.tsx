@@ -71,16 +71,30 @@ export function ApprovalPanel({
         <div className="flex items-center gap-2 mb-2">
           {sessionStatus === 'waiting_approval' ? (
             <CheckCircle2 className="w-5 h-5 text-blue-600" />
+          ) : sessionStatus === 'generating' ? (
+            <Loader2 className="w-5 h-5 text-blue-600 animate-spin" />
+          ) : sessionStatus === 'complete' ? (
+            <CheckCircle2 className="w-5 h-5 text-green-600" />
           ) : (
             <Loader2 className="w-5 h-5 text-blue-600 animate-spin" />
           )}
           <h3 className="text-lg font-semibold text-gray-900">
-            {sessionStatus === 'waiting_approval' ? 'Research Complete' : 'Researching...'}
+            {sessionStatus === 'waiting_approval' 
+              ? 'Research Complete' 
+              : sessionStatus === 'generating'
+              ? 'Generating Ideas...'
+              : sessionStatus === 'complete'
+              ? 'Research & Ideas Complete'
+              : 'Researching...'}
           </h3>
         </div>
         <p className="text-sm text-gray-600">
           {sessionStatus === 'waiting_approval' ? (
             'Review the research findings below. You can approve to proceed with idea generation, request refinements, or restart with a new query.'
+          ) : sessionStatus === 'generating' ? (
+            'Generating marketing copy ideas for each platform based on the research above...'
+          ) : sessionStatus === 'complete' ? (
+            'Research and ideas have been generated. Review the findings below and check the sidebar for platform-specific marketing copy.'
           ) : (
             'Gathering research and insights. This may take a moment...'
           )}
@@ -138,7 +152,7 @@ export function ApprovalPanel({
                 )}
               </div>
             ) : (
-              /* When waiting for approval: Show full research report */
+              /* When waiting_approval, generating, or complete: Show full research report */
               <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
                 <div className="flex items-center gap-2 mb-2">
                   <FileText className="w-4 h-4 text-gray-600" />
@@ -171,8 +185,8 @@ export function ApprovalPanel({
               </div>
             )}
 
-            {/* Sources - Only show when research is complete (waiting for approval) */}
-            {sessionStatus === 'waiting_approval' && sources && sources.length > 0 && (
+            {/* Sources - Show for all statuses except researching */}
+            {sessionStatus !== 'researching' && sources && sources.length > 0 && (
               <div className="mb-6">
                 <div className="flex items-center gap-2 mb-2">
                   <ExternalLink className="w-4 h-4 text-gray-600" />
@@ -186,8 +200,8 @@ export function ApprovalPanel({
               </div>
             )}
 
-            {/* Trending Topics - Only show when research is complete (waiting for approval) */}
-            {sessionStatus === 'waiting_approval' && trendingTopics && trendingTopics.length > 0 && (
+            {/* Trending Topics - Show for all statuses except researching */}
+            {sessionStatus !== 'researching' && trendingTopics && trendingTopics.length > 0 && (
               <div className="mb-6">
                 <div className="flex items-center gap-2 mb-2">
                   <TrendingUp className="w-4 h-4 text-gray-600" />
@@ -283,8 +297,8 @@ export function ApprovalPanel({
             )}
           </div>
 
-      {/* Fixed Action Buttons - Hide when status is complete */}
-      {sessionStatus !== 'complete' && (
+      {/* Fixed Action Buttons - Hide when status is generating or complete */}
+      {sessionStatus !== 'complete' && sessionStatus !== 'generating' && (
         <div className="p-4 pt-3 border-t border-blue-200 flex-shrink-0 bg-white rounded-b-lg">
           <div className="flex gap-3">
             <button

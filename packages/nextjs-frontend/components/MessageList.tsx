@@ -171,8 +171,8 @@ export function MessageList({ messages, approvalData, sessionStatus, isGeneratin
         )
       })}
       
-      {/* Approval Panel as a message - Hide when status is complete */}
-      {approvalData && onApprove && onRefine && onRestart && sessionStatus !== 'complete' && (
+      {/* Approval Panel - Show whenever approvalData exists (all statuses) */}
+      {approvalData && onApprove && onRefine && onRestart && (
         <div className="max-w-2xl">
           <ApprovalPanel
             research={approvalData.research}

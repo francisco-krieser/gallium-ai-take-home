@@ -1,7 +1,9 @@
+"use node";
+
 import { action } from "./_generated/server";
 import { v } from "convex/values";
 import { api } from "./_generated/api";
-import { StateGraph } from "@langchain/langgraph";
+import { StateGraph, START, END, Annotation } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import {
@@ -35,32 +37,20 @@ if (typeof globalThis.performance === "undefined") {
   } as any;
 }
 
-// Types matching the Python AgentState
-interface AgentState {
-  query: string;
-  platforms: string[];
-  persona?: "author" | "founder";
-  research: string;
-  sources: string[];
-  trendingTopics: Array<{
-    topic: string;
-    reason: string;
-    url?: string;
-    timestamp?: string;
-    confidence?: string;
-  }>;
-  needsApproval: boolean;
-  approved: boolean;
-  ideas: Record<string, string[]>;
-  currentStep: string;
-  sessionId: string;
-  scope: {
-    time_window: string;
-    region: string;
-    domain: string;
-  };
-  toolsToUse: string[];
-  trendCandidates: Array<{
+// LangGraph State Definition using Annotation
+const AgentStateAnnotation = Annotation.Root({
+  // Input parameters
+  query: Annotation<string>,
+  platforms: Annotation<string[]>,
+  persona: Annotation<"author" | "founder" | undefined>,
+  sessionId: Annotation<string>,
+  mode: Annotation<string>, // "fast" | "deep"
+  isRefinement: Annotation<boolean>,
+
+  // Research pipeline state
+  scope: Annotation<{ time_window: string; region: string; domain: string }>,
+  toolsToUse: Annotation<string[]>,
+  trendCandidates: Annotation<Array<{
     title: string;
     content: string;
     url: string;
@@ -70,8 +60,8 @@ interface AgentState {
     score?: number;
     comments?: number;
     subreddit?: string;
-  }>;
-  enrichedTrends: Array<{
+  }>>,
+  enrichedTrends: Annotation<Array<{
     title: string;
     summary: string;
     why_it_matters: string;
@@ -79,10 +69,36 @@ interface AgentState {
     published_date: string;
     source: string;
     key_evidence: string[];
-  }>;
-  researchReport: string;
-  confidenceScores: Record<string, { confidence: string; rationale: string }>;
-}
+  }>>,
+  researchReport: Annotation<string>,
+  research: Annotation<string>,
+  sources: Annotation<string[]>,
+  trendingTopics: Annotation<Array<{
+    topic: string;
+    reason: string;
+    url?: string;
+    timestamp?: string;
+    confidence?: string;
+  }>>,
+  confidenceScores: Annotation<Record<string, { confidence: string; rationale: string }>>,
+
+  // Approval & generation state
+  needsApproval: Annotation<boolean>,
+  approved: Annotation<boolean>,
+  ideas: Annotation<Record<string, string[]>>,
+
+  // Execution tracking
+  currentStep: Annotation<string>,
+
+  // Streaming support - events to yield
+  streamEvents: Annotation<Array<{
+    type: string;
+    [key: string]: any;
+  }>>,
+});
+
+// Type alias for convenience
+type AgentState = typeof AgentStateAnnotation.State;
 
 // Pending approvals are now stored in the database via sessions.ts
 
@@ -92,7 +108,8 @@ class MarketingCopyAgent {
   private composioApiKey: string | null;
   private composioUserId: string | null;
   private composioMcpUrl: string | null;
-  private graph: any; // StateGraph instance
+  private deepModeGraph: any; // StateGraph instance for deep mode
+  private fastModeGraph: any; // StateGraph instance for fast mode
 
   constructor() {
     const openaiApiKey = process.env.OPENAI_API_KEY;
@@ -108,7 +125,8 @@ class MarketingCopyAgent {
     this.composioApiKey = process.env.COMPOSIO_API_KEY || null;
     this.composioUserId = process.env.COMPOSIO_USER_ID || null;
     this.composioMcpUrl = null;
-    this.graph = null; // Will be initialized when needed
+    this.deepModeGraph = null; // Will be initialized when needed
+    this.fastModeGraph = null; // Will be initialized when needed
   }
 
   private normalizePlatformName(platform: string): string {
@@ -119,37 +137,154 @@ class MarketingCopyAgent {
     return platformLower;
   }
 
-  private buildDeepModeGraph(): any {
-    // Create a LangGraph StateGraph to orchestrate the workflow
-    // The graph defines the sequence: research_plan -> trend_retrieval -> research_report
-    // Note: LangGraph API may vary by version, so we use a flexible approach
-    
-    // Define the workflow nodes as a graph structure
-    // Even if we can't compile it due to API differences, the structure shows the orchestration
-    const workflowSteps = [
-      { name: "research_plan", method: this.researchPlanNode.bind(this) },
-      { name: "trend_retrieval", method: this.trendRetrievalNode.bind(this) },
-      { name: "research_report", method: this.researchReportNode.bind(this) },
-    ];
-
-    // Return a simple executor that follows the graph structure
+  // Helper to add stream event to state
+  private addStreamEvent(state: AgentState, event: any): Partial<AgentState> {
     return {
-      async invoke(initialState: AgentState, config?: any): Promise<AgentState> {
-        let state = initialState;
-        // Execute nodes in sequence as defined by the graph
-        for (const step of workflowSteps) {
-          const update = await step.method(state);
-          state = { ...state, ...update };
-        }
-        return state;
-      },
-      // Store the graph structure for reference
-      _graphStructure: workflowSteps,
+      streamEvents: [...(state.streamEvents || []), event],
     };
   }
 
-  private async researchPlanNode(state: AgentState): Promise<Partial<AgentState>> {
+  // LangGraph Node: Fast Mode Research
+  private fastModeNode = async (state: AgentState): Promise<Partial<AgentState>> => {
     const query = state.query;
+    const platforms = state.platforms;
+    const persona = state.persona;
+
+    // Collect all events
+    const events: any[] = [];
+
+    // Emit step event
+    events.push({
+      type: "step",
+      step: "fast_research",
+      message: USER_MESSAGES.fastResearch
+    });
+
+    const researchPrompt = PROMPTS.fastModeResearch(query, platforms, persona);
+    const systemMessage = SYSTEM_MESSAGES.marketingResearcher(
+      persona,
+      persona ? PERSONA_DESCRIPTIONS[persona] : undefined
+    );
+
+    const messages = [
+      new SystemMessage(systemMessage),
+      new HumanMessage(researchPrompt)
+    ];
+
+    const response = await this.llm.invoke(messages);
+    const responseText = typeof response.content === 'string' ? response.content : String(response.content);
+
+    let researchReport = "";
+    let sources: string[] = [];
+    let trendingTopics: any[] = [];
+    let enrichedTrends: any[] = [];
+    let confidenceScores: Record<string, any> = {};
+
+    try {
+      const jsonMatch = responseText.match(/\{.*"trending_topics".*\}/s);
+      if (jsonMatch) {
+        const parsedData = JSON.parse(jsonMatch[0]);
+        researchReport = parsedData.research_report || responseText;
+        sources = parsedData.sources || [];
+        trendingTopics = parsedData.trending_topics || [];
+        enrichedTrends = parsedData.enriched_trends || [];
+        confidenceScores = parsedData.confidence_scores || {};
+      } else {
+        researchReport = responseText;
+        const urlPattern = /https?:\/\/[^\s\)]+/g;
+        sources = Array.from(new Set(responseText.match(urlPattern) || []));
+        trendingTopics = sources.slice(0, THRESHOLDS.fallbackTrendCount).map((url, i) => ({
+          topic: `Trend ${i + 1}`,
+          reason: "Relevant trend identified in research",
+          url,
+          timestamp: new Date().toISOString(),
+          confidence: "Medium"
+        }));
+      }
+    } catch (error) {
+      console.error("Error parsing fast mode response:", error);
+      researchReport = responseText;
+      const urlPattern = /https?:\/\/[^\s\)]+/g;
+      sources = Array.from(new Set(responseText.match(urlPattern) || []));
+      trendingTopics = sources.slice(0, 5).map((url, i) => ({
+        topic: `Trend ${i + 1}`,
+        reason: "Relevant trend from research",
+        url,
+        timestamp: new Date().toISOString(),
+        confidence: "Medium"
+      }));
+    }
+
+    if (!researchReport) {
+      researchReport = `# Research Report: ${query}\n\nResearch generated for ${query} targeting ${platforms.join(", ")}.`;
+    }
+
+    if (trendingTopics.length === 0) {
+      trendingTopics = [{
+        topic: `Relevant trend for ${query}`,
+        reason: "Identified through research",
+        url: "",
+        timestamp: new Date().toISOString(),
+        confidence: "Medium"
+      }];
+    }
+
+    if (Object.keys(confidenceScores).length === 0) {
+      for (let i = 0; i < trendingTopics.length; i++) {
+        confidenceScores[`trend_${i}`] = {
+          confidence: trendingTopics[i].confidence || "Medium",
+          rationale: "Fast mode analysis"
+        };
+      }
+    }
+
+    events.push({
+      type: "research_complete",
+      research: researchReport,
+      research_report: researchReport,
+      sources,
+      trending_topics: trendingTopics,
+      enriched_trends: enrichedTrends,
+      confidence_scores: confidenceScores
+    });
+
+    events.push({
+      type: "approval_required",
+      message: USER_MESSAGES.approvalRequired,
+      research: researchReport,
+      research_report: researchReport,
+      sources,
+      trending_topics: trendingTopics,
+      enriched_trends: enrichedTrends,
+      confidence_scores: confidenceScores
+    });
+
+    return {
+      streamEvents: [...(state.streamEvents || []), ...events],
+      research: researchReport,
+      researchReport,
+      sources,
+      trendingTopics,
+      enrichedTrends,
+      confidenceScores,
+      needsApproval: true,
+      currentStep: "fast_research_complete",
+    };
+  };
+
+  // LangGraph Node: Research Plan
+  private researchPlanNode = async (state: AgentState): Promise<Partial<AgentState>> => {
+    const query = state.query;
+    
+    // Collect all events
+    const events: any[] = [];
+
+    // Emit step event
+    events.push({
+      type: "step",
+      step: "research_plan",
+      message: USER_MESSAGES.researchPlan
+    });
 
     const scopePrompt = PROMPTS.scopeAnalysis(query);
 
@@ -192,12 +327,21 @@ class MarketingCopyAgent {
       toolsToUse.push("tavily", "reddit"); // Will be simulated
     }
 
+    events.push({
+      type: "research_plan_complete",
+      scope,
+      tools_to_use: toolsToUse,
+      message: `Scope: ${scope.time_window}, ${scope.region}, ${scope.domain}. Tools: ${toolsToUse.join(", ")}`
+    });
+
     return {
+      streamEvents: [...(state.streamEvents || []), ...events],
       scope,
       toolsToUse,
       currentStep: "research_plan_complete"
     };
-  }
+  };
+
 
   private async fetchFromTavily(
     query: string,
@@ -299,11 +443,22 @@ class MarketingCopyAgent {
     return [];
   }
 
-  private async trendRetrievalNode(state: AgentState): Promise<Partial<AgentState>> {
+  // LangGraph Node: Trend Retrieval
+  private trendRetrievalNode = async (state: AgentState): Promise<Partial<AgentState>> => {
     const query = state.query;
     const scope = state.scope || { ...DEFAULT_SCOPE };
     const toolsToUse = state.toolsToUse || [];
     const platforms = state.platforms;
+
+    // Collect all events
+    const events: any[] = [];
+
+    // Emit step event
+    events.push({
+      type: "step",
+      step: "trend_retrieval",
+      message: USER_MESSAGES.trendRetrieval
+    });
 
     const trendCandidates: any[] = [];
 
@@ -317,6 +472,18 @@ class MarketingCopyAgent {
     if (toolsToUse.includes("reddit")) {
       const redditResults = await this.fetchFromReddit(query, scope);
       trendCandidates.push(...redditResults);
+    }
+
+    // Emit trend candidate events
+    for (const candidate of trendCandidates) {
+      events.push({
+        type: "trend_candidate",
+        candidate: {
+          title: candidate.title,
+          source: candidate.source,
+          url: candidate.url
+        }
+      });
     }
 
     // Enrich trends with LLM
@@ -364,17 +531,36 @@ class MarketingCopyAgent {
       }
     }
 
+    events.push({
+      type: "trend_retrieval_complete",
+      candidates_count: trendCandidates.length,
+      enriched_count: enrichedTrends.length,
+      message: `Found ${trendCandidates.length} trend candidates, enriched ${enrichedTrends.length} trends`
+    });
+
     return {
+      streamEvents: [...(state.streamEvents || []), ...events],
       trendCandidates,
       enrichedTrends,
       currentStep: "trend_retrieval_complete"
     };
-  }
+  };
 
-  private async researchReportNode(state: AgentState): Promise<Partial<AgentState>> {
+  // LangGraph Node: Research Report
+  private researchReportNode = async (state: AgentState): Promise<Partial<AgentState>> => {
     const enrichedTrends = state.enrichedTrends || [];
     const query = state.query;
     const scope = state.scope || {};
+
+    // Collect all events
+    const events: any[] = [];
+
+    // Emit step event
+    events.push({
+      type: "step",
+      step: "research_report",
+      message: USER_MESSAGES.researchReport
+    });
 
     const topTrends = enrichedTrends.slice(0, THRESHOLDS.maxTrendsForReport);
 
@@ -423,7 +609,7 @@ class MarketingCopyAgent {
     const reportPrompt = PROMPTS.researchReport(
       query,
       scope,
-      topTrends.map(t => ({ title: t.title, summary: t.summary, url: t.url })),
+      topTrends.map((t: any) => ({ title: t.title, summary: t.summary, url: t.url })),
       persona
     );
 
@@ -441,10 +627,10 @@ class MarketingCopyAgent {
     const researchReport = typeof response.content === 'string' ? response.content : String(response.content);
 
     // Extract sources
-    const sources = Array.from(new Set(topTrends.map(t => t.url).filter(Boolean)));
+    const sources = Array.from(new Set(topTrends.map((t: any) => t.url).filter(Boolean)));
 
     // Format trending topics
-    const trendingTopics = topTrends.map((t, i) => ({
+    const trendingTopics = topTrends.map((t: any, i: number) => ({
       topic: t.title || "",
       reason: t.why_it_matters || "",
       url: t.url || "",
@@ -452,7 +638,29 @@ class MarketingCopyAgent {
       confidence: confidenceScores[`trend_${i}`]?.confidence || "Medium"
     }));
 
+    events.push({
+      type: "research_complete",
+      research: researchReport,
+      research_report: researchReport,
+      sources,
+      trending_topics: trendingTopics,
+      enriched_trends: enrichedTrends,
+      confidence_scores: confidenceScores
+    });
+
+    events.push({
+      type: "approval_required",
+      message: USER_MESSAGES.approvalRequired,
+      research: researchReport,
+      research_report: researchReport,
+      sources,
+      trending_topics: trendingTopics,
+      enriched_trends: enrichedTrends,
+      confidence_scores: confidenceScores
+    });
+
     return {
+      streamEvents: [...(state.streamEvents || []), ...events],
       research: researchReport,
       researchReport,
       sources,
@@ -461,313 +669,17 @@ class MarketingCopyAgent {
       currentStep: "research_report_complete",
       needsApproval: true
     };
-  }
+  };
 
-  private async generateIdeasNode(state: AgentState): Promise<Partial<AgentState>> {
+  // LangGraph Node: Generate Ideas
+  private generateIdeasNode = async (state: AgentState): Promise<Partial<AgentState>> => {
     const platforms = state.platforms;
     const research = state.researchReport || state.research || "";
     const query = state.query;
     const persona = state.persona;
 
-    const ideas: Record<string, string[]> = {};
-
-    for (const platform of platforms) {
-      const platformPrompt = PROMPTS.platformCopyGeneration(research, platform, query, persona);
-
-      const systemMessage = SYSTEM_MESSAGES.marketingCopyExpert(
-        platform,
-        persona,
-        persona ? PERSONA_DESCRIPTIONS[persona] : undefined
-      );
-
-      const messages = [
-        new SystemMessage(systemMessage),
-        new HumanMessage(platformPrompt)
-      ];
-
-      const response = await this.llm.invoke(messages);
-      const ideasText = typeof response.content === 'string' ? response.content : String(response.content);
-      
-      try {
-        let ideasList: string[] = [];
-        const jsonMatch = ideasText.match(/\[.*?\]/s);
-        if (jsonMatch) {
-          ideasList = JSON.parse(jsonMatch[0]);
-          ideasList = ideasList.map((idea: any) => String(idea).trim().replace(/^["']|["']$/g, "")).filter((idea: string) => idea.length > THRESHOLDS.minIdeaLength);
-        } else {
-          // Fallback: split by lines
-          ideasList = ideasText
-            .split("\n")
-            .map(line => line.trim())
-            .filter(line => line && !line.startsWith("```") && !line.startsWith("#") && !["[", "]", "{", "}"].includes(line))
-            .map(line => line.replace(/^["']|["']$/g, "").replace(/,$/, "").trim())
-            .filter(line => line.length > THRESHOLDS.minIdeaLength);
-        }
-        ideas[platform] = ideasList.slice(0, THRESHOLDS.maxIdeasPerPlatform);
-      } catch (error) {
-        console.error(`Error parsing ideas for ${platform}:`, error);
-        ideas[platform] = [ideasText.substring(0, THRESHOLDS.fallbackTextLength)];
-      }
-    }
-
-    return {
-      ideas,
-      currentStep: "ideas_generated",
-      needsApproval: false
-    };
-  }
-
-  async *runFastMode(
-    query: string,
-    platforms: string[],
-    sessionId: string,
-    mode: string = "fast",
-    persona?: "author" | "founder"
-  ): AsyncGenerator<any, void, unknown> {
-    yield {
-      type: "step",
-      step: "fast_research",
-      message: USER_MESSAGES.fastResearch
-    };
-
-    const researchPrompt = PROMPTS.fastModeResearch(query, platforms, persona);
-
-    const systemMessage = SYSTEM_MESSAGES.marketingResearcher(
-      persona,
-      persona ? PERSONA_DESCRIPTIONS[persona] : undefined
-    );
-
-    const messages = [
-      new SystemMessage(systemMessage),
-      new HumanMessage(researchPrompt)
-    ];
-
-    const response = await this.llm.invoke(messages);
-    const responseText = typeof response.content === 'string' ? response.content : String(response.content);
-
-    let researchReport = "";
-    let sources: string[] = [];
-    let trendingTopics: any[] = [];
-    let enrichedTrends: any[] = [];
-    let confidenceScores: Record<string, any> = {};
-
-    try {
-      const jsonMatch = responseText.match(/\{.*"trending_topics".*\}/s);
-      if (jsonMatch) {
-        const parsedData = JSON.parse(jsonMatch[0]);
-        researchReport = parsedData.research_report || responseText;
-        sources = parsedData.sources || [];
-        trendingTopics = parsedData.trending_topics || [];
-        enrichedTrends = parsedData.enriched_trends || [];
-        confidenceScores = parsedData.confidence_scores || {};
-      } else {
-        researchReport = responseText;
-        const urlPattern = /https?:\/\/[^\s\)]+/g;
-        sources = Array.from(new Set(responseText.match(urlPattern) || []));
-        trendingTopics = sources.slice(0, THRESHOLDS.fallbackTrendCount).map((url, i) => ({
-          topic: `Trend ${i + 1}`,
-          reason: "Relevant trend identified in research",
-          url,
-          timestamp: new Date().toISOString(),
-          confidence: "Medium"
-        }));
-      }
-    } catch (error) {
-      console.error("Error parsing fast mode response:", error);
-      researchReport = responseText;
-      const urlPattern = /https?:\/\/[^\s\)]+/g;
-      sources = Array.from(new Set(responseText.match(urlPattern) || []));
-      trendingTopics = sources.slice(0, 5).map((url, i) => ({
-        topic: `Trend ${i + 1}`,
-        reason: "Relevant trend from research",
-        url,
-        timestamp: new Date().toISOString(),
-        confidence: "Medium"
-      }));
-    }
-
-    if (!researchReport) {
-      researchReport = `# Research Report: ${query}\n\nResearch generated for ${query} targeting ${platforms.join(", ")}.`;
-    }
-
-    if (trendingTopics.length === 0) {
-      trendingTopics = [{
-        topic: `Relevant trend for ${query}`,
-        reason: "Identified through research",
-        url: "",
-        timestamp: new Date().toISOString(),
-        confidence: "Medium"
-      }];
-    }
-
-    if (Object.keys(confidenceScores).length === 0) {
-      for (let i = 0; i < trendingTopics.length; i++) {
-        confidenceScores[`trend_${i}`] = {
-          confidence: trendingTopics[i].confidence || "Medium",
-          rationale: "Fast mode analysis"
-        };
-      }
-    }
-
-    // Store in pending approvals (will be stored via mutation in the action handler)
-
-    yield {
-      type: "research_complete",
-      research: researchReport,
-      research_report: researchReport,
-      sources,
-      trending_topics: trendingTopics,
-      enriched_trends: enrichedTrends,
-      confidence_scores: confidenceScores
-    };
-
-    yield {
-      type: "approval_required",
-      message: USER_MESSAGES.approvalRequired,
-      research: researchReport,
-      research_report: researchReport,
-      sources,
-      trending_topics: trendingTopics,
-      enriched_trends: enrichedTrends,
-      confidence_scores: confidenceScores
-    };
-  }
-
-  async *runStream(
-    query: string,
-    platforms: string[],
-    sessionId: string,
-    isRefinement: boolean = false,
-    mode: string = "deep",
-    persona?: "author" | "founder"
-  ): AsyncGenerator<any, void, unknown> {
-    if (mode === "fast") {
-      yield* this.runFastMode(query, platforms, sessionId, mode, persona);
-      return;
-    }
-
-    // Deep mode: use LangGraph to orchestrate the workflow
-    const graph = this.buildDeepModeGraph();
-    
-    // Initial state
-    let state: AgentState = {
-      query,
-      platforms,
-      persona,
-      research: "",
-      sources: [],
-      trendingTopics: [],
-      needsApproval: false,
-      approved: false,
-      ideas: {},
-      currentStep: "starting",
-      sessionId,
-      scope: { ...DEFAULT_SCOPE },
-      toolsToUse: [],
-      trendCandidates: [],
-      enrichedTrends: [],
-      researchReport: "",
-      confidenceScores: {}
-    };
-
-    // Use LangGraph to orchestrate the workflow
-    // The graph will execute nodes in sequence: research_plan -> trend_retrieval -> research_report
-    
-    // Step 1: Research Plan (orchestrated by LangGraph)
-    yield {
-      type: "step",
-      step: "research_plan",
-      message: USER_MESSAGES.researchPlan
-    };
-
-    // Execute the graph up to research_plan node
-    // Since LangGraph executes sequentially, we'll manually step through for event streaming
-    // but use the graph structure for orchestration
-    const planResult = await this.researchPlanNode(state);
-    state = { ...state, ...planResult };
-
-    yield {
-      type: "research_plan_complete",
-      scope: state.scope,
-      tools_to_use: state.toolsToUse,
-      message: `Scope: ${state.scope.time_window}, ${state.scope.region}, ${state.scope.domain}. Tools: ${state.toolsToUse.join(", ")}`
-    };
-
-    // Step 2: Trend Retrieval (orchestrated by LangGraph)
-    yield {
-      type: "step",
-      step: "trend_retrieval",
-      message: USER_MESSAGES.trendRetrieval
-    };
-
-    const retrievalResult = await this.trendRetrievalNode(state);
-    state = { ...state, ...retrievalResult };
-
-    for (const candidate of state.trendCandidates) {
-      yield {
-        type: "trend_candidate",
-        candidate: {
-          title: candidate.title,
-          source: candidate.source,
-          url: candidate.url
-        }
-      };
-    }
-
-    yield {
-      type: "trend_retrieval_complete",
-      candidates_count: state.trendCandidates.length,
-      enriched_count: state.enrichedTrends.length,
-      message: `Found ${state.trendCandidates.length} trend candidates, enriched ${state.enrichedTrends.length} trends`
-    };
-
-    // Step 3: Research Report (orchestrated by LangGraph)
-    yield {
-      type: "step",
-      step: "research_report",
-      message: USER_MESSAGES.researchReport
-    };
-
-    const reportResult = await this.researchReportNode(state);
-    state = { ...state, ...reportResult };
-
-    // Verify the graph orchestration by running it (it should produce the same result)
-    // This ensures LangGraph is properly orchestrating the workflow
-    const finalState = await graph.invoke(state, { configurable: { thread_id: sessionId } });
-    state = finalState;
-
-    yield {
-      type: "research_complete",
-      research: state.research,
-      research_report: state.researchReport,
-      sources: state.sources,
-      trending_topics: state.trendingTopics,
-      enriched_trends: state.enrichedTrends,
-      confidence_scores: state.confidenceScores
-    };
-
-    // Wait for approval (will be stored via mutation in the action handler)
-
-    yield {
-      type: "approval_required",
-      message: USER_MESSAGES.approvalRequired,
-      research: state.research,
-      research_report: state.researchReport,
-      sources: state.sources,
-      trending_topics: state.trendingTopics,
-      enriched_trends: state.enrichedTrends,
-      confidence_scores: state.confidenceScores
-    };
-  }
-
-  async *continueAfterApproval(
-    sessionId: string,
-    research: string,
-    platforms: string[],
-    persona?: "author" | "founder",
-    ctx?: any
-  ): AsyncGenerator<any, void, unknown> {
-    // Approval data will be retrieved from database in the action handler
+    // Collect all events
+    const events: any[] = [];
 
     const ideas: Record<string, string[]> = {};
 
@@ -803,10 +715,10 @@ class MarketingCopyAgent {
       } catch (error) {
         ideasList = ideasText
           .split("\n")
-          .map(line => line.trim())
-          .filter(line => line && !line.startsWith("#") && !line.startsWith("```") && !["[", "]", "{", "}"].includes(line))
-          .map(line => line.trim())
-          .filter(line => line.length > THRESHOLDS.minIdeaLength);
+          .map((line: string) => line.trim())
+          .filter((line: string) => line && !line.startsWith("#") && !line.startsWith("```") && !["[", "]", "{", "}"].includes(line))
+          .map((line: string) => line.trim())
+          .filter((line: string) => line.length > THRESHOLDS.minIdeaLength);
       }
 
       ideas[platform] = ideasList.slice(0, THRESHOLDS.maxIdeasPerPlatform).filter((idea: string) => 
@@ -816,17 +728,279 @@ class MarketingCopyAgent {
         idea !== "```"
       );
 
-      yield {
+      // Emit idea stream event
+      events.push({
         type: "idea_stream",
         platform,
         ideas: ideas[platform]
-      };
+      });
     }
 
-    yield {
+    events.push({
       type: "complete",
       ideas
+    });
+
+    return {
+      streamEvents: [...(state.streamEvents || []), ...events],
+      ideas,
+      currentStep: "ideas_generated",
+      needsApproval: false
     };
+  };
+
+  // Conditional edge function: Check if approval is needed
+  private checkApproval = (state: AgentState): string => {
+    if (state.needsApproval && !state.approved) {
+      return "end"; // Exit graph, wait for external approval
+    }
+    return "generate_ideas"; // Continue to idea generation
+  };
+
+  // Build Deep Mode Graph
+  private buildDeepModeGraph(): any {
+    const graph = new StateGraph(AgentStateAnnotation)
+      .addNode("research_plan", this.researchPlanNode)
+      .addNode("trend_retrieval", this.trendRetrievalNode)
+      .addNode("research_report", this.researchReportNode)
+      .addNode("generate_ideas", this.generateIdeasNode);
+
+    // Add edges - deep mode goes straight to research_plan
+    graph.addEdge(START, "research_plan");
+    graph.addEdge("research_plan", "trend_retrieval");
+    graph.addEdge("trend_retrieval", "research_report");
+    graph.addConditionalEdges(
+      "research_report",
+      this.checkApproval,
+      {
+        end: END,
+        generate_ideas: "generate_ideas"
+      }
+    );
+    graph.addEdge("generate_ideas", END);
+
+    return graph.compile();
+  }
+
+  // Build Fast Mode Graph
+  private buildFastModeGraph(): any {
+    const graph = new StateGraph(AgentStateAnnotation)
+      .addNode("fast_mode", this.fastModeNode);
+
+    // Add edges - fast mode goes straight to fast_mode
+    graph.addEdge(START, "fast_mode");
+    graph.addConditionalEdges(
+      "fast_mode",
+      this.checkApproval,
+      {
+        end: END,
+        generate_ideas: END // Fast mode doesn't generate ideas in the graph
+      }
+    );
+
+    return graph.compile();
+  }
+
+  // Transform LangGraph state updates to streaming events
+  private *transformGraphEvents(state: AgentState): Generator<any, void, unknown> {
+    // Yield all accumulated stream events
+    for (const event of state.streamEvents || []) {
+      yield event;
+    }
+  }
+
+  async *runFastMode(
+    query: string,
+    platforms: string[],
+    sessionId: string,
+    mode: string = "fast",
+    persona?: "author" | "founder"
+  ): AsyncGenerator<any, void, unknown> {
+    // Initialize graph if needed
+    if (!this.fastModeGraph) {
+      this.fastModeGraph = this.buildFastModeGraph();
+    }
+
+    // Initial state
+    const initialState: AgentState = {
+      query,
+      platforms,
+      persona,
+      sessionId,
+      mode: "fast",
+      isRefinement: false,
+      research: "",
+      sources: [],
+      trendingTopics: [],
+      needsApproval: false,
+      approved: false,
+      ideas: {},
+      currentStep: "starting",
+      scope: { ...DEFAULT_SCOPE },
+      toolsToUse: [],
+      trendCandidates: [],
+      enrichedTrends: [],
+      researchReport: "",
+      confidenceScores: {},
+      streamEvents: [],
+    };
+
+    // Use stream() instead of invoke() to get incremental state updates
+    let lastEventCount = 0;
+    const stream = await this.fastModeGraph.stream(initialState, {
+      configurable: { thread_id: sessionId }
+    });
+    
+    for await (const chunk of stream) {
+      // LangGraph stream returns chunks with node names as keys
+      // Extract the state from the chunk
+      const stateUpdate = Object.values(chunk)[0] as AgentState;
+      if (stateUpdate && stateUpdate.streamEvents) {
+        // Extract new events that haven't been yielded yet
+        const currentEvents = stateUpdate.streamEvents;
+        const newEvents = currentEvents.slice(lastEventCount);
+        
+        // Yield new events as they come in
+        for (const event of newEvents) {
+          yield event;
+        }
+        
+        lastEventCount = currentEvents.length;
+      }
+    }
+  }
+
+  async *runStream(
+    query: string,
+    platforms: string[],
+    sessionId: string,
+    isRefinement: boolean = false,
+    mode: string = "deep",
+    persona?: "author" | "founder"
+  ): AsyncGenerator<any, void, unknown> {
+    if (mode === "fast") {
+      yield* this.runFastMode(query, platforms, sessionId, mode, persona);
+      return;
+    }
+
+    // Deep mode: use LangGraph to orchestrate the workflow
+    if (!this.deepModeGraph) {
+      this.deepModeGraph = this.buildDeepModeGraph();
+    }
+    
+    // Initial state
+    const initialState: AgentState = {
+      query,
+      platforms,
+      persona,
+      sessionId,
+      mode: "deep",
+      isRefinement,
+      research: "",
+      sources: [],
+      trendingTopics: [],
+      needsApproval: false,
+      approved: false,
+      ideas: {},
+      currentStep: "starting",
+      scope: { ...DEFAULT_SCOPE },
+      toolsToUse: [],
+      trendCandidates: [],
+      enrichedTrends: [],
+      researchReport: "",
+      confidenceScores: {},
+      streamEvents: [],
+    };
+
+    // Use stream() instead of invoke() to get incremental state updates
+    // This allows us to yield events as they happen, not just at the end
+    let lastEventCount = 0;
+    const stream = await this.deepModeGraph.stream(initialState, {
+      configurable: { thread_id: sessionId }
+    });
+    
+    for await (const chunk of stream) {
+      // LangGraph stream returns chunks with node names as keys
+      // Extract the state from the chunk
+      const stateUpdate = Object.values(chunk)[0] as AgentState;
+      if (stateUpdate && stateUpdate.streamEvents) {
+        // Extract new events that haven't been yielded yet
+        const currentEvents = stateUpdate.streamEvents;
+        const newEvents = currentEvents.slice(lastEventCount);
+        
+        // Yield new events as they come in
+        for (const event of newEvents) {
+          yield event;
+        }
+        
+        lastEventCount = currentEvents.length;
+      }
+    }
+  }
+
+  async *continueAfterApproval(
+    sessionId: string,
+    research: string,
+    platforms: string[],
+    persona?: "author" | "founder",
+    ctx?: any
+  ): AsyncGenerator<any, void, unknown> {
+    // Build a simple graph for idea generation after approval
+    const ideaGraph = new StateGraph(AgentStateAnnotation)
+      .addNode("generate_ideas", this.generateIdeasNode);
+
+    ideaGraph.addEdge(START, "generate_ideas");
+    ideaGraph.addEdge("generate_ideas", END);
+
+    const compiledGraph = ideaGraph.compile();
+
+    // Initial state with approved research
+    const initialState: AgentState = {
+      query: "", // Not needed for idea generation
+      platforms,
+      persona,
+      sessionId,
+      mode: "deep",
+      isRefinement: false,
+      research,
+      researchReport: research,
+      sources: [],
+      trendingTopics: [],
+      needsApproval: false,
+      approved: true, // Mark as approved to skip approval check
+      ideas: {},
+      currentStep: "generating_ideas",
+      scope: { ...DEFAULT_SCOPE },
+      toolsToUse: [],
+      trendCandidates: [],
+      enrichedTrends: [],
+      confidenceScores: {},
+      streamEvents: [],
+    };
+
+    // Use stream() instead of invoke() to get incremental state updates
+    let lastEventCount = 0;
+    const stream = await compiledGraph.stream(initialState, {
+      configurable: { thread_id: sessionId }
+    });
+    
+    for await (const chunk of stream) {
+      // LangGraph stream returns chunks with node names as keys
+      // Extract the state from the chunk
+      const stateUpdate = Object.values(chunk)[0] as AgentState;
+      if (stateUpdate && stateUpdate.streamEvents) {
+        // Extract new events that haven't been yielded yet
+        const currentEvents = stateUpdate.streamEvents;
+        const newEvents = currentEvents.slice(lastEventCount);
+        
+        // Yield new events as they come in
+        for (const event of newEvents) {
+          yield event;
+        }
+        
+        lastEventCount = currentEvents.length;
+      }
+    }
   }
 }
 

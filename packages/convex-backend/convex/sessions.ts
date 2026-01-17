@@ -10,15 +10,38 @@ export const createSession = mutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
-    await ctx.db.insert("sessions", {
-      sessionId: args.sessionId,
-      query: args.query,
-      platforms: args.platforms,
-      persona: args.persona,
-      status: "researching",
-      createdAt: now,
-      updatedAt: now,
-    });
+    
+    // Check if session already exists
+    const existing = await ctx.db
+      .query("sessions")
+      .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
+      .first();
+    
+    if (existing) {
+      // Update existing session
+      await ctx.db.patch(existing._id, {
+        query: args.query,
+        platforms: args.platforms,
+        persona: args.persona,
+        status: "researching",
+        research: undefined,
+        sources: undefined,
+        trendingTopics: undefined,
+        ideas: undefined,
+        updatedAt: now,
+      });
+    } else {
+      // Create new session
+      await ctx.db.insert("sessions", {
+        sessionId: args.sessionId,
+        query: args.query,
+        platforms: args.platforms,
+        persona: args.persona,
+        status: "researching",
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
   },
 });
 

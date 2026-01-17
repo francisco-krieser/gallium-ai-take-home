@@ -172,6 +172,22 @@ export const handleStreamEvent = mutation({
       });
     } else if (event.type === "idea_stream") {
       console.log("Processing idea_stream event for platform:", event.platform, "Ideas count:", event.ideas?.length)
+      
+      // Get current session to preserve research data and check status
+      const session = await ctx.db
+        .query("sessions")
+        .withIndex("by_session", (q: any) => q.eq("sessionId", sessionId))
+        .first()
+      
+      if (!session) {
+        console.error("ERROR: Session not found for idea_stream event!")
+        throw new Error("Session not found")
+      }
+      
+      // Update status to "generating" on first idea_stream event (if still waiting_approval)
+      // This ensures consistent state transition
+      const shouldUpdateStatus = session.status === "waiting_approval"
+      
       // Clean up ideas - parse JSON strings if needed
       let cleanedIdeas = event.ideas || []
       if (Array.isArray(cleanedIdeas) && cleanedIdeas.length > 0) {
@@ -223,24 +239,15 @@ export const handleStreamEvent = mutation({
       
       // Update ideas directly in the database (we're already in a mutation)
       try {
-        const session = await ctx.db
-          .query("sessions")
-          .withIndex("by_session", (q: any) => q.eq("sessionId", sessionId))
-          .first()
-        
-        if (!session) {
-          console.error("ERROR: Session not found for idea_stream event!")
-          throw new Error("Session not found")
-        }
-        
         // Create a completely new object to ensure Convex detects the change
         // Deep clone to ensure reactivity
         const currentIdeas = session.ideas ? JSON.parse(JSON.stringify(session.ideas)) : {}
         currentIdeas[event.platform] = cleanedIdeas
         
-        // Use replace instead of patch to ensure full object update
+        // Update ideas and status, preserving research
         await ctx.db.patch(session._id, {
           ideas: currentIdeas,
+          ...(shouldUpdateStatus && { status: "generating" }),
           updatedAt: Date.now(),
         })
         

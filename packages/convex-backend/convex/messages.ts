@@ -33,11 +33,13 @@ export const addMessage = mutation({
 export const getMessages = query({
   args: { sessionId: v.string() },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const messages = await ctx.db
       .query("messages")
       .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
-      .order("asc")
       .collect();
+    
+    // Sort by timestamp to ensure chronological order
+    return messages.sort((a, b) => a.timestamp - b.timestamp);
   },
 });
 

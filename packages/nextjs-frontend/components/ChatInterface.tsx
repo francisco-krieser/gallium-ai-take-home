@@ -60,19 +60,31 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
     setShowApproval(false)
 
     try {
-      // Add user message
+      // If session exists and is complete, reset it before starting a new query
+      if (session && session.status === 'complete') {
+        // Clear all messages from previous query
+        await deleteMessages({ sessionId })
+        
+        // Reset session to initial state
+        await resetSession({
+          sessionId,
+          query: input,
+        })
+      } else {
+        // For new sessions or in-progress sessions, create/update session
+        await createSession({
+          sessionId,
+          query: input,
+          platforms,
+          persona: persona,
+        })
+      }
+
+      // Add user message after clearing old messages
       await addMessage({
         sessionId,
         type: 'user',
         content: input,
-      })
-
-      // Create session in Convex
-      await createSession({
-        sessionId,
-        query: input,
-        platforms,
-        persona: persona,
       })
 
       // Call Convex action to generate ideas
@@ -166,15 +178,20 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
   }
 
   useEffect(() => {
-    // Show approval panel when researching (to show progress) or waiting for approval
-    if ((session?.status === 'researching' || session?.status === 'waiting_approval') && !showApproval) {
+    // Show approval panel for all statuses (researching, waiting_approval, generating, complete)
+    // The panel will handle hiding buttons based on status
+    const shouldShowPanel = session?.status === 'researching' || 
+                           session?.status === 'waiting_approval' || 
+                           session?.status === 'generating' ||
+                           session?.status === 'complete'
+    
+    if (shouldShowPanel && !showApproval) {
       setShowApproval(true)
     }
     
-    // Update approval data whenever session data changes
-    // When researching: show trendingTopics as they accumulate
-    // When waiting for approval: show full research
-    if (session && (session.status === 'researching' || session.status === 'waiting_approval')) {
+    // Update approval data whenever session has research data
+    // Preserve research data for all statuses so it remains visible
+    if (session && shouldShowPanel && session.research) {
       setApprovalData({
         research: session.research,
         sources: session.sources,
@@ -182,12 +199,8 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
       })
     }
     
-    // Hide approval panel when status is complete or when restarting
-    if (session?.status === 'complete' || session?.status === 'generating') {
-      setShowApproval(false)
-    }
-    
-    // Clear input when status becomes complete
+    // Never hide the panel once research is available - keep it visible even when complete
+    // Only clear input when status becomes complete
     if (session?.status === 'complete') {
       setInput('')
     }
