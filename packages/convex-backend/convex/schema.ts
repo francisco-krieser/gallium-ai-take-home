@@ -42,4 +42,27 @@ export default defineSchema({
     metadata: v.optional(v.any()),
     timestamp: v.number(),
   }).index("by_session", ["sessionId"]),
+
+  pendingApprovals: defineTable({
+    sessionId: v.string(),
+    research: v.optional(v.string()),
+    researchReport: v.optional(v.string()),
+    sources: v.optional(v.array(v.string())),
+    trendingTopics: v.optional(v.array(v.object({
+      topic: v.string(),
+      reason: v.string(),
+      url: v.optional(v.string()),
+      timestamp: v.optional(v.string()),
+      confidence: v.optional(v.string()),
+    }))),
+    enrichedTrends: v.optional(v.any()),
+    confidenceScores: v.optional(v.any()),
+    scope: v.optional(v.any()),
+    platforms: v.array(v.string()),
+    originalQuery: v.string(),
+    mode: v.optional(v.string()),
+    approved: v.optional(v.boolean()),
+    needsRefinement: v.optional(v.boolean()),
+    createdAt: v.number(),
+  }).index("by_session", ["sessionId"]),
 });

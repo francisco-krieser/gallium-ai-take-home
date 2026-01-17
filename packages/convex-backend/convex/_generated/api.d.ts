@@ -9,6 +9,7 @@
  */
 
 import type * as actions from "../actions.js";
+import type * as agent from "../agent.js";
 import type * as messages from "../messages.js";
 import type * as sessions from "../sessions.js";
 import type * as streamHandler from "../streamHandler.js";
@@ -21,6 +22,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   actions: typeof actions;
+  agent: typeof agent;
   messages: typeof messages;
   sessions: typeof sessions;
   streamHandler: typeof streamHandler;

@@ -145,3 +145,88 @@ export const resetSession = mutation({
     });
   },
 });
+
+// Pending approvals management
+export const storePendingApproval = mutation({
+  args: {
+    sessionId: v.string(),
+    research: v.optional(v.string()),
+    researchReport: v.optional(v.string()),
+    sources: v.optional(v.array(v.string())),
+    trendingTopics: v.optional(v.array(v.object({
+      topic: v.string(),
+      reason: v.string(),
+      url: v.optional(v.string()),
+      timestamp: v.optional(v.string()),
+      confidence: v.optional(v.string()),
+    }))),
+    enrichedTrends: v.optional(v.any()),
+    confidenceScores: v.optional(v.any()),
+    scope: v.optional(v.any()),
+    platforms: v.array(v.string()),
+    originalQuery: v.string(),
+    mode: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("pendingApprovals")
+      .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
+      .first();
+
+    const data = {
+      sessionId: args.sessionId,
+      research: args.research,
+      researchReport: args.researchReport,
+      sources: args.sources,
+      trendingTopics: args.trendingTopics,
+      enrichedTrends: args.enrichedTrends,
+      confidenceScores: args.confidenceScores,
+      scope: args.scope,
+      platforms: args.platforms,
+      originalQuery: args.originalQuery,
+      mode: args.mode,
+      approved: false,
+      needsRefinement: false,
+      createdAt: Date.now(),
+    };
+
+    if (existing) {
+      await ctx.db.patch(existing._id, data);
+    } else {
+      await ctx.db.insert("pendingApprovals", data);
+    }
+  },
+});
+
+export const getPendingApproval = query({
+  args: { sessionId: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("pendingApprovals")
+      .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
+      .first();
+  },
+});
+
+export const updatePendingApproval = mutation({
+  args: {
+    sessionId: v.string(),
+    approved: v.optional(v.boolean()),
+    needsRefinement: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("pendingApprovals")
+      .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
+      .first();
+
+    if (!existing) {
+      throw new Error("Pending approval not found");
+    }
+
+    await ctx.db.patch(existing._id, {
+      approved: args.approved,
+      needsRefinement: args.needsRefinement,
+    });
+  },
+});
