@@ -7,6 +7,9 @@
     "deploy": "convex deploy"
   },
   "dependencies": {
+    "@langchain/core": "^1.1.15",
+    "@langchain/langgraph": "^1.1.0",
+    "@langchain/openai": "^1.2.2",
     "convex": "^1.10.0",
     "openai": "^4.104.0"
   },
