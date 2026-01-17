@@ -2,6 +2,7 @@
 
 import { Bot, User, Loader2, FileText, Sparkles } from 'lucide-react'
 import clsx from 'clsx'
+import ReactMarkdown from 'react-markdown'
 import { ApprovalPanel } from './ApprovalPanel'
 
 interface Message {
@@ -155,7 +156,26 @@ export function MessageList({ messages, approvalData, sessionStatus, isGeneratin
                 <FileText className="w-4 h-4 text-gray-600" />
                 <span className="text-sm font-medium text-gray-900">Research Update</span>
               </div>
-              <p className="text-sm text-gray-700 whitespace-pre-wrap">{message.content}</p>
+              <div className="text-sm text-gray-700 prose prose-sm max-w-none">
+                <ReactMarkdown
+                  components={{
+                    h1: ({node, ...props}) => <h1 className="text-lg font-bold mt-4 mb-2 text-gray-900" {...props} />,
+                    h2: ({node, ...props}) => <h2 className="text-base font-bold mt-3 mb-2 text-gray-900" {...props} />,
+                    h3: ({node, ...props}) => <h3 className="text-sm font-semibold mt-2 mb-1 text-gray-900" {...props} />,
+                    p: ({node, ...props}) => <p className="mb-2 text-gray-700" {...props} />,
+                    ul: ({node, ...props}) => <ul className="list-disc list-inside mb-2 space-y-1" {...props} />,
+                    ol: ({node, ...props}) => <ol className="list-decimal list-inside mb-2 space-y-1" {...props} />,
+                    li: ({node, ...props}) => <li className="text-gray-700" {...props} />,
+                    strong: ({node, ...props}) => <strong className="font-semibold text-gray-900" {...props} />,
+                    em: ({node, ...props}) => <em className="italic" {...props} />,
+                    a: ({node, ...props}) => <a className="text-blue-600 hover:text-blue-800 underline" target="_blank" rel="noopener noreferrer" {...props} />,
+                    code: ({node, ...props}) => <code className="bg-gray-200 px-1 rounded text-xs" {...props} />,
+                    pre: ({node, ...props}) => <pre className="bg-gray-100 p-2 rounded overflow-x-auto text-xs mb-2" {...props} />,
+                  }}
+                >
+                  {message.content}
+                </ReactMarkdown>
+              </div>
             </div>
           )
         }
