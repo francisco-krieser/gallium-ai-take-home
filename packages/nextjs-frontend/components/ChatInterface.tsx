@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { useMutation, useQuery } from 'convex/react'
+import { useMutation, useQuery, useAction } from 'convex/react'
 // @ts-ignore - Import from backend package
 import { api } from '../../convex-backend/convex/_generated/api'
 import { StepIndicator } from './StepIndicator'
@@ -27,11 +27,12 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
   const updateSession = useMutation(api.sessions.updateSession)
   const deleteMessages = useMutation(api.messages.deleteMessages)
   const resetSession = useMutation(api.sessions.resetSession)
+  const generateIdeas = useAction(api.actions.generateIdeas)
+  const approveResearch = useAction(api.actions.approveResearch)
   const session = useQuery(api.sessions.getSession, { sessionId })
   const messages = useQuery(api.messages.getMessages, { sessionId })
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const FASTAPI_URL = process.env.NEXT_PUBLIC_FASTAPI_URL || 'http://localhost:8000'
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -42,134 +43,6 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
     console.log('Messages updated:', messages?.length, messages)
   }, [messages])
 
-  const streamFromFastAPI = async (url: string, body: any) => {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    })
-
-    if (!response.ok) {
-      throw new Error(`FastAPI error: ${response.statusText}`)
-    }
-
-    const reader = response.body?.getReader()
-    const decoder = new TextDecoder()
-
-    if (!reader) {
-      throw new Error('No response body')
-    }
-
-    let buffer = ''
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      const chunk = decoder.decode(value, { stream: true })
-      buffer += chunk
-      
-      console.log('Received chunk:', chunk.substring(0, 100))
-      
-      // Process all complete data lines immediately
-      // Look for lines starting with "data: " and try to parse them
-      const lines = buffer.split('\n')
-      const unprocessedLines: string[] = []
-      
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i]
-        const trimmedLine = line.trim()
-        
-        if (trimmedLine.startsWith('data: ')) {
-          const data = trimmedLine.slice(6).trim()
-          
-          if (data && data !== '[DONE]') {
-            // Try to parse as JSON immediately
-            try {
-              const event = JSON.parse(data)
-              console.log('Parsed event:', event.type, event)
-              
-              // Log idea_stream events specifically
-              if (event.type === 'idea_stream') {
-                console.log('IDEA_STREAM EVENT - Platform:', event.platform, 'Ideas count:', event.ideas?.length)
-              }
-              
-              // Update Convex state immediately
-              try {
-                await handleStreamEvent({
-                  sessionId,
-                  event,
-                })
-                console.log('Event sent to Convex successfully:', event.type)
-                
-                // For idea_stream, log that it was sent
-                if (event.type === 'idea_stream') {
-                  console.log('IDEA_STREAM sent to Convex for platform:', event.platform)
-                }
-              } catch (convexError) {
-                console.error('Error sending event to Convex:', convexError, 'Event type:', event.type)
-              }
-              
-              // If it's a complete event, log it specifically
-              if (event.type === 'complete') {
-                console.log('COMPLETE EVENT RECEIVED - Status should update now')
-              }
-              
-              // This line was processed successfully, don't add to unprocessed
-              continue
-            } catch (e) {
-              // JSON parse failed - might be incomplete JSON
-              // Check if it looks like incomplete JSON (starts with { or [ but doesn't end properly)
-              if ((data.startsWith('{') && !data.endsWith('}')) || 
-                  (data.startsWith('[') && !data.endsWith(']'))) {
-                // Incomplete JSON - keep this and all following lines in buffer
-                unprocessedLines.push(...lines.slice(i))
-                break
-              }
-              // Not JSON or malformed - skip it
-              continue
-            }
-          }
-        }
-        
-        // For non-data lines or ping lines, keep them if they're at the end (might be part of incomplete event)
-        if (i === lines.length - 1 && (trimmedLine.startsWith(':') || trimmedLine === '')) {
-          // Last line is a ping or empty - might be part of incomplete event, keep it
-          unprocessedLines.push(line)
-        }
-      }
-      
-      // Update buffer with unprocessed lines
-      buffer = unprocessedLines.join('\n')
-      console.log('Buffer remaining:', buffer.length, 'chars')
-    }
-    
-    // Process any remaining buffer
-    if (buffer.trim()) {
-      console.log('Processing final buffer:', buffer.substring(0, 200))
-      const lines = buffer.split('\n')
-      for (const line of lines) {
-        const trimmedLine = line.trim()
-        if (trimmedLine.startsWith('data: ')) {
-          const data = trimmedLine.slice(6).trim()
-          if (data && data !== '[DONE]') {
-            try {
-              const event = JSON.parse(data)
-              console.log('Parsed final event:', event)
-              await handleStreamEvent({
-                sessionId,
-                event,
-              })
-            } catch (e) {
-              console.error('Error parsing final event:', e)
-            }
-          }
-        }
-      }
-    }
-  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -193,11 +66,11 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
         platforms,
       })
 
-      // Stream from FastAPI
-      await streamFromFastAPI(`${FASTAPI_URL}/generate`, {
+      // Call Convex action to generate ideas
+      await generateIdeas({
         query: input,
         platforms,
-        session_id: sessionId,
+        sessionId,
         mode: mode,
       })
     } catch (error) {
@@ -269,9 +142,9 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
         })
       }
 
-      // Stream from FastAPI
-      await streamFromFastAPI(`${FASTAPI_URL}/approve`, {
-        session_id: sessionId,
+      // Call Convex action to handle approval
+      await approveResearch({
+        sessionId,
         action,
         refinement,
       })

@@ -1,8 +1,7 @@
 # Marketing Copy Agent - Monorepo
 
 A monorepo containing:
-- FastAPI service with LangGraph agent for marketing copy generation
-- Convex backend with actions
+- Convex backend with agent logic for marketing copy generation
 - Next.js frontend with Convex integration
 
 ## Features
@@ -20,19 +19,14 @@ A monorepo containing:
 
 ## Structure
 
-- `packages/fastapi-agent/` - FastAPI service with LangGraph agent
-- `packages/convex-backend/` - Convex backend with actions and state management
-- `packages/nextjs-frontend/` - Next.js frontend with streaming UI
+- `packages/convex-backend/` - Convex backend with agent logic, actions, and state management
+- `packages/nextjs-frontend/` - Next.js frontend with real-time UI
 
 ## Setup
 
 ### Prerequisites
 
 - Node.js 18+
-- Python 3.11 or 3.12 (Python 3.13 is too new and may have compatibility issues with some packages)
-  - Use `python3 --version` to check
-  - If you have Python 2 as default, use `python3` explicitly
-  - If you have Python 3.13, consider using Python 3.12: `python3.12 --version`
 - OpenAI API key
 - Convex account (free tier works)
 
@@ -42,54 +36,38 @@ A monorepo containing:
 npm install
 ```
 
-### 2. Set up FastAPI Agent
+### 2. Set up Convex Backend
 
 ```bash
-cd packages/fastapi-agent
-python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Upgrade pip first (helps with prebuilt wheels)
-pip install --upgrade pip setuptools wheel
-
-# Install dependencies
-# Note: If you encounter tiktoken version conflicts, install tiktoken first:
-pip install "tiktoken>=0.5.2,<0.6.0"
-# Then install other dependencies
-pip install -r requirements.txt
+cd packages/convex-backend
+npm install
+npx convex dev
 ```
 
-**Note**: If your system defaults to Python 2, use `python3` explicitly. You can verify your Python version with `python3 --version` (should be 3.10+).
+This will:
+- Create a new Convex project (if first time)
+- Generate API types
+- Start the dev server
 
-**Troubleshooting**: 
-- **Rust compiler errors**: First try `pip install --only-binary :all: -r requirements.txt` (forces prebuilt wheels). If that fails, upgrade pip or install Rust.
-- **Python 3.13 compatibility**: If you see "Python 3.13 is newer than PyO3's maximum supported version", use Python 3.11 or 3.12 instead: `python3.12 -m venv .venv`
-- **Tiktoken version conflict**: If you see conflicts between `tavily-python` and `langchain-openai` regarding tiktoken versions, try:
-  ```bash
-  # Install tiktoken first with compatible version
-  pip install "tiktoken>=0.5.2,<0.6.0"
-  # Then install other packages (may need to force reinstall tavily-python)
-  pip install -r requirements.txt --upgrade
-  ```
-  If that doesn't work, you can install packages without strict dependency checking:
-  ```bash
-  pip install -r requirements.txt --no-deps
-  pip install tiktoken langchain langchain-openai langgraph tavily-python composio-core
-  ```
-
-Create `.env` file:
+Set environment variables in Convex using the CLI:
 ```bash
-OPENAI_API_KEY=your_openai_api_key_here
+cd packages/convex-backend
+npx convex env set OPENAI_API_KEY your_openai_api_key_here
+npx convex env set TAVILY_API_KEY your_tavily_api_key_here  # Optional
+npx convex env set COMPOSIO_API_KEY your_composio_api_key_here  # Optional
+npx convex env set COMPOSIO_USER_ID your_composio_user_id_here  # Optional
 ```
 
-#### Optional: Set up Research Tools (Tavily & Reddit)
+**Note**: Environment variables in Convex are set per deployment. For local development, they're set in your Convex project. You can also view and manage them in the Convex dashboard.
+
+**Optional: Set up Research Tools (Tavily & Reddit)**
 
 The agent uses **Tavily** (web search) and **Reddit** (community trends) to fetch trend candidates. The system will work in simulation mode if credentials aren't provided, but real data requires API keys.
 
 **Tavily Setup:**
 1. Sign up at [https://tavily.com](https://tavily.com)
 2. Get your API key from the dashboard
-3. Add to `.env`:
+3. Add to `.env.local`:
 ```bash
 TAVILY_API_KEY=your_tavily_api_key_here
 ```
@@ -103,7 +81,7 @@ TAVILY_API_KEY=your_tavily_api_key_here
    - Click "Connect" and authorize the required permissions (read posts, search, etc.)
    - This will allow Composio's MCP server to access Reddit on your behalf
 5. Note your **User ID** from the Composio dashboard (usually your email or account ID)
-6. Add to `.env`:
+6. Add to `.env.local`:
 ```bash
 COMPOSIO_API_KEY=your_composio_api_key_here
 COMPOSIO_USER_ID=your_composio_user_id_here
@@ -111,27 +89,9 @@ COMPOSIO_USER_ID=your_composio_user_id_here
 
 **Note**: If these credentials are not provided, the agent will simulate trend data for development/testing purposes.
 
-### 3. Set up Convex Backend
-
-```bash
-cd packages/convex-backend
-npm install
-npx convex dev
-```
-
-This will:
-- Create a new Convex project (if first time)
-- Generate API types
-- Start the dev server
-
-Create `.env` file (optional, defaults to localhost):
-```bash
-FASTAPI_URL=http://localhost:8000
-```
-
 Copy the Convex URL from the output and use it in the Next.js frontend.
 
-### 4. Set up Next.js Frontend
+### 3. Set up Next.js Frontend
 
 ```bash
 cd packages/nextjs-frontend
@@ -140,41 +100,22 @@ npm install
 
 Create `.env.local` file:
 ```bash
-NEXT_PUBLIC_CONVEX_URL=your_convex_url_from_step_3
-NEXT_PUBLIC_FASTAPI_URL=http://localhost:8000
+NEXT_PUBLIC_CONVEX_URL=your_convex_url_from_step_2
 ```
 
 ## Running
 
-### Option 1: Run Everything Separately
-
-1. Start FastAPI agent:
-```bash
-cd packages/fastapi-agent
-source .venv/bin/activate
-uvicorn main:app --reload --port 8000
-```
-
-2. Start Convex (in a new terminal):
+1. Start Convex (in a terminal):
 ```bash
 cd packages/convex-backend
 npx convex dev
 ```
 
-3. Start Next.js (in a new terminal):
+2. Start Next.js (in a new terminal):
 ```bash
 cd packages/nextjs-frontend
 npm run dev
 ```
-
-### Option 2: Use Root Script
-
-From root directory:
-```bash
-npm run dev
-```
-
-This starts FastAPI and Next.js concurrently. You'll still need to run Convex separately.
 
 ## Usage
 
@@ -187,20 +128,13 @@ This starts FastAPI and Next.js concurrently. You'll still need to run Convex se
 
 ## Architecture
 
-- **FastAPI**: Handles LangGraph agent execution, streaming via SSE
-- **Convex**: Manages state (sessions, messages, ideas) and provides real-time updates
-- **Next.js**: Frontend streams from FastAPI and subscribes to Convex for state updates
+- **Convex Backend**: Handles agent logic, state management (sessions, messages, ideas), and provides real-time updates
+- **Next.js Frontend**: Frontend calls Convex actions and subscribes to Convex for reactive state updates
 
 ## Development Notes
 
 - The frontend imports Convex API types from the backend package
-- Streaming happens directly from FastAPI to the frontend
-- Convex mutations update state as events stream in
-- The agent uses LangGraph with conditional edges for HITL flow
-
-## Python Version Notes
-
-If your system defaults to Python 2:
-- Always use `python3` explicitly instead of `python`
-- The virtual environment will use Python 3 once created with `python3 -m venv`
-- After activating the venv, `python` and `pip` commands will automatically use Python 3
+- All agent logic runs in Convex actions
+- Convex mutations update state as events are processed
+- The agent implements a three-step workflow: research plan → trend retrieval → research report
+- Real-time updates are provided through Convex's reactive queries
