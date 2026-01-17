@@ -89,44 +89,90 @@ export function ApprovalPanel({
 
       {/* Scrollable Content Area */}
       <div className="flex-1 overflow-y-auto p-4 min-h-0">
-            {/* Research Summary - Single div that changes content based on status */}
-            <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
-              <div className="flex items-center gap-2 mb-2">
-                {research ? (
-                  <FileText className="w-4 h-4 text-gray-600" />
-                ) : (
-                  <Loader2 className="w-4 h-4 text-gray-600 animate-spin" />
-                )}
-                <h4 className="font-medium text-gray-900">Research Summary</h4>
-              </div>
-              {research ? (
-                <div className="text-sm text-gray-700 prose prose-sm max-w-none">
-                  <ReactMarkdown
-                    components={{
-                      h1: ({node, ...props}) => <h1 className="text-lg font-bold mt-4 mb-2 text-gray-900" {...props} />,
-                      h2: ({node, ...props}) => <h2 className="text-base font-bold mt-3 mb-2 text-gray-900" {...props} />,
-                      h3: ({node, ...props}) => <h3 className="text-sm font-semibold mt-2 mb-1 text-gray-900" {...props} />,
-                      p: ({node, ...props}) => <p className="mb-2 text-gray-700" {...props} />,
-                      ul: ({node, ...props}) => <ul className="list-disc list-inside mb-2 space-y-1" {...props} />,
-                      ol: ({node, ...props}) => <ol className="list-decimal list-inside mb-2 space-y-1" {...props} />,
-                      li: ({node, ...props}) => <li className="text-gray-700" {...props} />,
-                      strong: ({node, ...props}) => <strong className="font-semibold text-gray-900" {...props} />,
-                      em: ({node, ...props}) => <em className="italic" {...props} />,
-                      a: ({node, ...props}) => <a className="text-blue-600 hover:text-blue-800 underline" target="_blank" rel="noopener noreferrer" {...props} />,
-                      code: ({node, ...props}) => <code className="bg-gray-200 px-1 rounded text-xs" {...props} />,
-                      pre: ({node, ...props}) => <pre className="bg-gray-100 p-2 rounded overflow-x-auto text-xs mb-2" {...props} />,
-                    }}
-                  >
-                    {research}
-                  </ReactMarkdown>
+            {/* When researching: Show compact list of trend titles */}
+            {sessionStatus === 'researching' ? (
+              <div className="mb-6">
+                <div className="flex items-center gap-2 mb-3">
+                  <TrendingUp className="w-4 h-4 text-gray-600" />
+                  <h4 className="font-medium text-gray-900">Trends Found</h4>
+                  {trendingTopics && trendingTopics.length > 0 && (
+                    <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
+                      {trendingTopics.length} {trendingTopics.length === 1 ? 'trend' : 'trends'}
+                    </span>
+                  )}
+                  <Loader2 className="w-3 h-3 text-gray-400 animate-spin ml-auto" />
                 </div>
-              ) : (
-                <p className="text-sm text-gray-500 italic">Gathering research and insights...</p>
-              )}
-            </div>
+                {trendingTopics && trendingTopics.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {trendingTopics.map((topic, index) => (
+                      <div 
+                        key={index} 
+                        className="flex items-center gap-2 p-2 bg-white rounded border border-gray-200 hover:border-blue-300 transition-colors"
+                      >
+                        <div className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xs font-medium">
+                          {index + 1}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-gray-900 truncate">
+                            {topic.topic}
+                          </div>
+                        </div>
+                        {topic.confidence && (
+                          <div className={clsx(
+                            "flex-shrink-0 px-2 py-0.5 rounded text-xs font-medium",
+                            topic.confidence === "High" ? "bg-green-100 text-green-700" :
+                            topic.confidence === "Medium" ? "bg-yellow-100 text-yellow-700" :
+                            "bg-gray-100 text-gray-700"
+                          )}>
+                            {topic.confidence}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-gray-500">
+                    <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-gray-400" />
+                    <p className="text-sm">Discovering trends...</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* When waiting for approval: Show full research report */
+              <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                <div className="flex items-center gap-2 mb-2">
+                  <FileText className="w-4 h-4 text-gray-600" />
+                  <h4 className="font-medium text-gray-900">Research Summary</h4>
+                </div>
+                {research ? (
+                  <div className="text-sm text-gray-700 prose prose-sm max-w-none">
+                    <ReactMarkdown
+                      components={{
+                        h1: ({node, ...props}) => <h1 className="text-lg font-bold mt-4 mb-2 text-gray-900" {...props} />,
+                        h2: ({node, ...props}) => <h2 className="text-base font-bold mt-3 mb-2 text-gray-900" {...props} />,
+                        h3: ({node, ...props}) => <h3 className="text-sm font-semibold mt-2 mb-1 text-gray-900" {...props} />,
+                        p: ({node, ...props}) => <p className="mb-2 text-gray-700" {...props} />,
+                        ul: ({node, ...props}) => <ul className="list-disc list-inside mb-2 space-y-1" {...props} />,
+                        ol: ({node, ...props}) => <ol className="list-decimal list-inside mb-2 space-y-1" {...props} />,
+                        li: ({node, ...props}) => <li className="text-gray-700" {...props} />,
+                        strong: ({node, ...props}) => <strong className="font-semibold text-gray-900" {...props} />,
+                        em: ({node, ...props}) => <em className="italic" {...props} />,
+                        a: ({node, ...props}) => <a className="text-blue-600 hover:text-blue-800 underline" target="_blank" rel="noopener noreferrer" {...props} />,
+                        code: ({node, ...props}) => <code className="bg-gray-200 px-1 rounded text-xs" {...props} />,
+                        pre: ({node, ...props}) => <pre className="bg-gray-100 p-2 rounded overflow-x-auto text-xs mb-2" {...props} />,
+                      }}
+                    >
+                      {research}
+                    </ReactMarkdown>
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-500 italic">Gathering research and insights...</p>
+                )}
+              </div>
+            )}
 
-            {/* Sources */}
-            {sources && sources.length > 0 && (
+            {/* Sources - Only show when research is complete (waiting for approval) */}
+            {sessionStatus === 'waiting_approval' && sources && sources.length > 0 && (
               <div className="mb-6">
                 <div className="flex items-center gap-2 mb-2">
                   <ExternalLink className="w-4 h-4 text-gray-600" />
@@ -140,8 +186,8 @@ export function ApprovalPanel({
               </div>
             )}
 
-            {/* Trending Topics */}
-            {trendingTopics && trendingTopics.length > 0 && (
+            {/* Trending Topics - Only show when research is complete (waiting for approval) */}
+            {sessionStatus === 'waiting_approval' && trendingTopics && trendingTopics.length > 0 && (
               <div className="mb-6">
                 <div className="flex items-center gap-2 mb-2">
                   <TrendingUp className="w-4 h-4 text-gray-600" />

@@ -45,31 +45,19 @@ export function MessageList({ messages, approvalData, sessionStatus, isGeneratin
   // 1. Hide step messages when status has moved beyond that step
   // 2. Hide system messages that are just JSON strings (research_partial events)
   // 3. Hide idea messages (they're shown in the sidebar)
-  // 4. Hide research messages when approval panel is visible (they're shown in the approval panel)
+  // 4. Show partial research messages when status is 'researching', hide duplicates when final research is available
   const filteredMessages = messages.filter((message) => {
     // Filter out idea messages - they're displayed in the sidebar
     if (message.type === 'idea') {
       return false
     }
     
-    // Filter out research messages when approval panel is visible (to avoid duplication)
-    // But keep them when approval panel is hidden (after ideas are generated)
-    // Also keep old research messages when a new research is in progress (refinement scenario)
-    if (message.type === 'research' && approvalData && sessionStatus !== 'complete') {
-      // Only hide research messages when we're waiting for approval (not actively researching)
-      // This allows old research to stay visible when a refinement triggers new research
-      if (sessionStatus === 'waiting_approval') {
-        // Only hide if this message matches the current research in approval panel
-        // This allows multiple research messages to coexist (old + new)
-        // Use a fuzzy match since content might have slight differences
-        const messageContent = message.content.trim()
-        const approvalContent = approvalData.research?.trim() || ''
-        if (messageContent === approvalContent || 
-            (approvalContent.length > 0 && messageContent.includes(approvalContent.substring(0, 100)))) {
-          return false
-        }
-      }
-      // When status is "researching", show all research messages (including old ones)
+    // Hide all research messages - they're shown in the ApprovalPanel instead
+    // When researching, partial findings are shown in the panel as a compact list
+    // When waiting for approval, the full research is shown in the panel
+    if (message.type === 'research') {
+      // Hide all research messages - they're displayed in the ApprovalPanel
+      return false;
     }
     
     // Filter out system messages that are just JSON strings
@@ -149,36 +137,6 @@ export function MessageList({ messages, approvalData, sessionStatus, isGeneratin
           )
         }
 
-        if (message.type === 'research') {
-          return (
-            <div key={message._id} className="max-w-2xl bg-gray-100 rounded-lg p-4 border border-gray-200">
-              <div className="flex items-center gap-2 mb-2">
-                <FileText className="w-4 h-4 text-gray-600" />
-                <span className="text-sm font-medium text-gray-900">Research Update</span>
-              </div>
-              <div className="text-sm text-gray-700 prose prose-sm max-w-none">
-                <ReactMarkdown
-                  components={{
-                    h1: ({node, ...props}) => <h1 className="text-lg font-bold mt-4 mb-2 text-gray-900" {...props} />,
-                    h2: ({node, ...props}) => <h2 className="text-base font-bold mt-3 mb-2 text-gray-900" {...props} />,
-                    h3: ({node, ...props}) => <h3 className="text-sm font-semibold mt-2 mb-1 text-gray-900" {...props} />,
-                    p: ({node, ...props}) => <p className="mb-2 text-gray-700" {...props} />,
-                    ul: ({node, ...props}) => <ul className="list-disc list-inside mb-2 space-y-1" {...props} />,
-                    ol: ({node, ...props}) => <ol className="list-decimal list-inside mb-2 space-y-1" {...props} />,
-                    li: ({node, ...props}) => <li className="text-gray-700" {...props} />,
-                    strong: ({node, ...props}) => <strong className="font-semibold text-gray-900" {...props} />,
-                    em: ({node, ...props}) => <em className="italic" {...props} />,
-                    a: ({node, ...props}) => <a className="text-blue-600 hover:text-blue-800 underline" target="_blank" rel="noopener noreferrer" {...props} />,
-                    code: ({node, ...props}) => <code className="bg-gray-200 px-1 rounded text-xs" {...props} />,
-                    pre: ({node, ...props}) => <pre className="bg-gray-100 p-2 rounded overflow-x-auto text-xs mb-2" {...props} />,
-                  }}
-                >
-                  {message.content}
-                </ReactMarkdown>
-              </div>
-            </div>
-          )
-        }
 
         // Handle approval messages - update text based on status
         const isApprovalMessage = message.type === 'approval' || 

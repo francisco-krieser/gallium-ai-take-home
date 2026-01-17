@@ -171,22 +171,14 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
       setShowApproval(true)
     }
     
-    // Update approval data whenever session data changes (to show research when it completes)
-    // Only update if we're waiting for approval (not actively researching new content)
-    // This ensures the panel shows empty/loading state during new research after refinement
-    if (session && session.status === 'waiting_approval') {
+    // Update approval data whenever session data changes
+    // When researching: show trendingTopics as they accumulate
+    // When waiting for approval: show full research
+    if (session && (session.status === 'researching' || session.status === 'waiting_approval')) {
       setApprovalData({
         research: session.research,
         sources: session.sources,
         trendingTopics: session.trendingTopics,
-      })
-    } else if (session && session.status === 'researching' && !approvalData?.research) {
-      // Only set empty state if approvalData doesn't already have research
-      // This prevents clearing when we're just showing progress
-      setApprovalData({
-        research: undefined,
-        sources: undefined,
-        trendingTopics: undefined,
       })
     }
     

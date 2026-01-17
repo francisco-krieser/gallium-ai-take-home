@@ -11,6 +11,12 @@ export const handleStreamEvent = mutation({
   handler: async (ctx, args) => {
     const { sessionId, event } = args;
 
+    // Get current session to accumulate partial findings
+    const session = await ctx.db
+      .query("sessions")
+      .withIndex("by_session", (q: any) => q.eq("sessionId", sessionId))
+      .first();
+
     // Store message (skip for complete event and research_partial - they're handled separately)
     // research_partial events are not stored as separate messages - they update the research message
     if (event.type !== "complete" && event.type !== "research_partial") {
@@ -34,12 +40,91 @@ export const handleStreamEvent = mutation({
         // Don't create a message for scope - it's not needed in the UI
         return;
       } else if (event.type === "trend_candidate") {
-        // Don't create a message for each trend candidate - too noisy
-        // Instead, we'll show a summary in trend_retrieval_complete
+        // Accumulate trend candidates and update session incrementally
+        if (session) {
+          const currentTrendingTopics = session.trendingTopics || [];
+          const newTopic = {
+            topic: event.candidate?.title || "Trending topic",
+            reason: `Found from ${event.candidate?.source || "web"}`,
+            url: event.candidate?.url || "",
+            timestamp: new Date().toISOString(),
+            confidence: "Medium"
+          };
+          
+          // Check if this topic already exists (avoid duplicates)
+          const exists = currentTrendingTopics.some(
+            (t: any) => t.url === newTopic.url || t.topic === newTopic.topic
+          );
+          
+          if (!exists) {
+            const updatedTopics = [...currentTrendingTopics, newTopic];
+            
+            // Update session with new trending topics
+            await ctx.runMutation(api.sessions.updateSession, {
+              sessionId,
+              trendingTopics: updatedTopics,
+            });
+            
+            // Create a research message with partial findings
+            const partialResearch = formatPartialResearch(updatedTopics, session.sources || []);
+            await ctx.runMutation(api.sessions.updateSession, {
+              sessionId,
+              research: partialResearch,
+            });
+            
+            // Create or update research message
+            await ctx.runMutation(api.messages.addMessage, {
+              sessionId,
+              type: "research",
+              content: partialResearch,
+              metadata: { isPartial: true, trendCount: updatedTopics.length },
+            });
+          }
+        }
         return;
       } else if (event.type === "trend_retrieval_complete") {
         messageType = "step";
         content = `Found ${event.candidates_count || 0} trend candidates, enriched ${event.enriched_count || 0} trends`;
+        
+        // Update session with enriched trends if available
+        if (session && event.enriched_trends && Array.isArray(event.enriched_trends)) {
+          const enrichedTopics = event.enriched_trends.map((trend: any, index: number) => ({
+            topic: trend.title || trend.topic || `Trend ${index + 1}`,
+            reason: trend.why_it_matters || trend.reason || "Relevant trend for marketing",
+            url: trend.url || "",
+            timestamp: trend.published_date || new Date().toISOString(),
+            confidence: "Medium"
+          }));
+          
+          await ctx.runMutation(api.sessions.updateSession, {
+            sessionId,
+            trendingTopics: enrichedTopics,
+          });
+          
+          // Update research with enriched trends
+          const partialResearch = formatPartialResearch(enrichedTopics, session.sources || []);
+          await ctx.runMutation(api.sessions.updateSession, {
+            sessionId,
+            research: partialResearch,
+          });
+          
+          // Create research message with enriched trends
+          await ctx.runMutation(api.messages.addMessage, {
+            sessionId,
+            type: "research",
+            content: partialResearch,
+            metadata: { isPartial: true, trendCount: enrichedTopics.length },
+          });
+        }
+        
+        // Also create the step message for progress indication
+        await ctx.runMutation(api.messages.addMessage, {
+          sessionId,
+          type: messageType as any,
+          content: content,
+          metadata: event,
+        });
+        return;
       } else if (event.type === "research_report_partial") {
         // Don't create messages for partial reports
         return;
@@ -55,14 +140,16 @@ export const handleStreamEvent = mutation({
         }
       }
       
-      await ctx.runMutation(api.messages.addMessage, {
-        sessionId,
-        type: messageType as any,
-        content: content,
-        platform: event.platform,
-        ideas: Array.isArray(event.ideas) ? event.ideas : undefined,
-        metadata: event,
-      });
+      if (event.type !== "trend_candidate" && event.type !== "trend_retrieval_complete") {
+        await ctx.runMutation(api.messages.addMessage, {
+          sessionId,
+          type: messageType as any,
+          content: content,
+          platform: event.platform,
+          ideas: Array.isArray(event.ideas) ? event.ideas : undefined,
+          metadata: event,
+        });
+      }
     }
 
     // Update session state
@@ -253,3 +340,50 @@ export const handleStreamEvent = mutation({
     }
   },
 });
+
+// Helper function to format partial research from trending topics
+function formatPartialResearch(
+  trendingTopics: Array<{
+    topic: string;
+    reason: string;
+    url?: string;
+    timestamp?: string;
+    confidence?: string;
+  }>,
+  sources: string[]
+): string {
+  let research = `# Research Report (In Progress)\n\n`;
+  research += `*Finding trends... ${trendingTopics.length} trend${trendingTopics.length !== 1 ? 's' : ''} discovered so far.*\n\n`;
+  
+  if (trendingTopics.length > 0) {
+    research += `## Top Trends Discovered\n\n`;
+    
+    trendingTopics.forEach((topic, index) => {
+      research += `### ${index + 1}. ${topic.topic}\n\n`;
+      research += `**Why it matters**: ${topic.reason}\n\n`;
+      
+      if (topic.url) {
+        research += `**Source**: [View source](${topic.url})\n\n`;
+      }
+      
+      if (topic.timestamp) {
+        research += `**Published**: ${new Date(topic.timestamp).toLocaleDateString()}\n\n`;
+      }
+      
+      if (topic.confidence) {
+        research += `**Confidence**: ${topic.confidence}\n\n`;
+      }
+      
+      research += `---\n\n`;
+    });
+  }
+  
+  if (sources.length > 0) {
+    research += `## Sources\n\n`;
+    sources.forEach((source, index) => {
+      research += `${index + 1}. [${source}](${source})\n`;
+    });
+  }
+  
+  return research;
+}
