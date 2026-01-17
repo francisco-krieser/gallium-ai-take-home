@@ -58,6 +58,8 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
 
     setIsGenerating(true)
     setShowApproval(false)
+    // Clear approval data when starting a new query
+    setApprovalData(null)
 
     try {
       // If session exists and is complete, reset it before starting a new query
@@ -190,13 +192,23 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
     }
     
     // Update approval data whenever session has research data
-    // Preserve research data for all statuses so it remains visible
-    if (session && shouldShowPanel && session.research) {
-      setApprovalData({
-        research: session.research,
-        sources: session.sources,
-        trendingTopics: session.trendingTopics,
-      })
+    // But only show trends when they're actually available for the current research
+    if (session && shouldShowPanel) {
+      // If status is researching and there are no trendingTopics yet, clear old data
+      if (session.status === 'researching' && (!session.trendingTopics || session.trendingTopics.length === 0)) {
+        setApprovalData({
+          research: undefined,
+          sources: undefined,
+          trendingTopics: undefined,
+        })
+      } else if (session.research || session.trendingTopics) {
+        // Only update with session data if it exists
+        setApprovalData({
+          research: session.research,
+          sources: session.sources,
+          trendingTopics: session.trendingTopics,
+        })
+      }
     }
     
     // Never hide the panel once research is available - keep it visible even when complete

@@ -1,6 +1,6 @@
 // LLM Configuration
 export const LLM_CONFIG = {
-  modelName: "gpt-4-turbo-preview",
+  modelName: "gpt-4o-mini",
   temperature: 0.7,
 } as const;
 
