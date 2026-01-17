@@ -4,6 +4,19 @@ import { api } from "./_generated/api";
 import { StateGraph } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import {
+  LLM_CONFIG,
+  TAVILY_CONFIG,
+  PERSONA_DESCRIPTIONS,
+  TREND_SOURCES_CONFIG,
+  DEFAULT_SCOPE,
+  THRESHOLDS,
+  SYSTEM_MESSAGES,
+  PROMPTS,
+  USER_MESSAGES,
+  getPersonaContext,
+  getPersonaCopyContext,
+} from "./config";
 
 // Polyfill for performance API (required by LangChain in Convex runtime)
 if (typeof globalThis.performance === "undefined") {
@@ -21,25 +34,6 @@ if (typeof globalThis.performance === "undefined") {
     clearMeasures: () => {},
   } as any;
 }
-
-// Persona definitions
-const PERSONA_DESCRIPTIONS: Record<string, string> = {
-  author: `You are an author who's also a short-form content creator trying to sell your book. Your persona:
-- Focuses on storytelling, personal brand, and engaging narratives
-- Creates short-form content (TikTok, Instagram Reels, YouTube Shorts)
-- Promotes books through compelling stories and personal connection
-- Uses emotional hooks, relatable experiences, and narrative-driven content
-- Targets readers and book lovers through authentic, personal content
-- Emphasizes the journey, transformation, and human elements of your story`,
-
-  founder: `You are a founder who loves to post on LinkedIn/X to promote your product. Your persona:
-- Focuses on thought leadership, product promotion, and professional networking
-- Creates B2B marketing content for LinkedIn and X (Twitter)
-- Shares industry insights, product updates, and entrepreneurial wisdom
-- Uses data-driven insights, case studies, and professional expertise
-- Targets other founders, professionals, and potential customers
-- Emphasizes value proposition, business outcomes, and industry trends`
-};
 
 // Types matching the Python AgentState
 interface AgentState {
@@ -92,67 +86,6 @@ interface AgentState {
 
 // Pending approvals are now stored in the database via sessions.ts
 
-// Trend sources config - will be loaded from JSON
-const trendSourcesConfig: Record<string, string[]> = {
-  x: [
-    "sproutsocial.com",
-    "socialmediatoday.com",
-    "socialrails.com",
-    "buffer.com",
-    "hootsuite.com",
-    "later.com",
-    "twitter.com/i/trends"
-  ],
-  linkedin: [
-    "metricool.com",
-    "socialmediatoday.com",
-    "sproutsocial.com",
-    "socialrails.com",
-    "buffer.com",
-    "hootsuite.com",
-    "linkedin.com/pulse"
-  ],
-  instagram: [
-    "sproutsocial.com",
-    "socialmediatoday.com",
-    "socialrails.com",
-    "later.com",
-    "buffer.com",
-    "hootsuite.com",
-    "creatormarketplace.instagram.com"
-  ],
-  tiktok: [
-    "sproutsocial.com",
-    "socialmediatoday.com",
-    "voguebusiness.com",
-    "later.com",
-    "buffer.com",
-    "hootsuite.com"
-  ],
-  pinterest: [
-    "pinterest.com",
-    "socialmediatoday.com",
-    "sproutsocial.com",
-    "buffer.com",
-    "hootsuite.com"
-  ],
-  facebook: [
-    "sproutsocial.com",
-    "socialmediatoday.com",
-    "socialrails.com",
-    "buffer.com",
-    "hootsuite.com"
-  ],
-  youtube: [
-    "sproutsocial.com",
-    "socialmediatoday.com",
-    "socialrails.com",
-    "buffer.com",
-    "hootsuite.com",
-    "youtube.com/trending"
-  ]
-};
-
 class MarketingCopyAgent {
   private llm: ChatOpenAI;
   private tavilyApiKey: string | null;
@@ -167,8 +100,8 @@ class MarketingCopyAgent {
       throw new Error("OPENAI_API_KEY environment variable is not set. Please set it using: npx convex env set OPENAI_API_KEY <your-key>");
     }
     this.llm = new ChatOpenAI({
-      modelName: "gpt-4-turbo-preview",
-      temperature: 0.7,
+      modelName: LLM_CONFIG.modelName,
+      temperature: LLM_CONFIG.temperature,
       openAIApiKey: openaiApiKey,
     });
     this.tavilyApiKey = process.env.TAVILY_API_KEY || null;
@@ -218,20 +151,10 @@ class MarketingCopyAgent {
   private async researchPlanNode(state: AgentState): Promise<Partial<AgentState>> {
     const query = state.query;
 
-    const scopePrompt = `
-      Analyze the following query and automatically determine the research scope:
-      Query: ${query}
-      
-      Determine:
-      1. Time window: How recent should the trends be? (e.g., "last 7 days", "last 30 days", "last 3 months")
-      2. Region: What geographic region is relevant? (e.g., "global", "US", "Europe", "Asia")
-      3. Domain: What industry/domain is this about? (e.g., "technology", "marketing", "consumer goods", "finance")
-      
-      Return a JSON object with keys: time_window, region, domain
-    `;
+    const scopePrompt = PROMPTS.scopeAnalysis(query);
 
     const messages = [
-      new SystemMessage("You are a research planning assistant. Analyze queries and determine appropriate research scope."),
+      new SystemMessage(SYSTEM_MESSAGES.researchPlanningAssistant),
       new HumanMessage(scopePrompt)
     ];
 
@@ -239,7 +162,7 @@ class MarketingCopyAgent {
     const scopeText = typeof response.content === 'string' ? response.content : String(response.content);
     
     // Parse scope from response
-    let scope = { time_window: "last 30 days", region: "global", domain: "general" };
+    let scope: { time_window: string; region: string; domain: string } = { ...DEFAULT_SCOPE };
     try {
       const jsonMatch = scopeText.match(/\{.*?\}/s);
       if (jsonMatch) {
@@ -300,7 +223,7 @@ class MarketingCopyAgent {
     const allDomains: string[] = [];
     for (const platform of platforms) {
       const normalizedPlatform = this.normalizePlatformName(platform);
-      const platformDomains = trendSourcesConfig[normalizedPlatform] || [];
+      const platformDomains = TREND_SOURCES_CONFIG[normalizedPlatform] || [];
       allDomains.push(...platformDomains);
     }
 
@@ -315,15 +238,15 @@ class MarketingCopyAgent {
       const searchParams: any = {
         api_key: this.tavilyApiKey,
         query: searchQuery,
-        search_depth: "advanced",
-        max_results: 10,
+        search_depth: TAVILY_CONFIG.searchDepth,
+        max_results: TAVILY_CONFIG.maxResults,
       };
 
       if (uniqueDomains.length > 0) {
         searchParams.include_domains = uniqueDomains;
       }
 
-      const response = await fetch("https://api.tavily.com/search", {
+      const response = await fetch(TAVILY_CONFIG.apiEndpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -378,7 +301,7 @@ class MarketingCopyAgent {
 
   private async trendRetrievalNode(state: AgentState): Promise<Partial<AgentState>> {
     const query = state.query;
-    const scope = state.scope || { time_window: "last 30 days", region: "global", domain: "general" };
+    const scope = state.scope || { ...DEFAULT_SCOPE };
     const toolsToUse = state.toolsToUse || [];
     const platforms = state.platforms;
 
@@ -398,23 +321,12 @@ class MarketingCopyAgent {
 
     // Enrich trends with LLM
     const enrichedTrends: any[] = [];
-    for (const candidate of trendCandidates.slice(0, 15)) {
-      const enrichmentPrompt = `
-        Analyze this trend candidate and provide:
-        1. A 1-2 sentence summary
-        2. Why this trend matters for marketing
-        3. Key supporting evidence points
-        
-        Trend: ${candidate.title || ""}
-        Content: ${(candidate.content || "").substring(0, 500)}
-        Source: ${candidate.source || ""}
-        
-        Return JSON with: summary, why_it_matters, key_evidence
-      `;
+    for (const candidate of trendCandidates.slice(0, THRESHOLDS.maxTrendsToEnrich)) {
+      const enrichmentPrompt = PROMPTS.trendEnrichment(candidate);
 
       try {
         const messages = [
-          new SystemMessage("You are a trend analysis expert. Provide concise, actionable insights."),
+          new SystemMessage(SYSTEM_MESSAGES.trendAnalysisExpert),
           new HumanMessage(enrichmentPrompt)
         ];
 
@@ -429,7 +341,7 @@ class MarketingCopyAgent {
           }
         } catch (e) {
           enrichment = {
-            summary: enrichmentText.substring(0, 200),
+            summary: enrichmentText.substring(0, THRESHOLDS.fallbackTextLength),
             why_it_matters: "Relevant trend for target audience",
             key_evidence: [candidate.url || ""]
           };
@@ -464,7 +376,7 @@ class MarketingCopyAgent {
     const query = state.query;
     const scope = state.scope || {};
 
-    const topTrends = enrichedTrends.slice(0, 10);
+    const topTrends = enrichedTrends.slice(0, THRESHOLDS.maxTrendsForReport);
 
     // Generate confidence scores
     const confidenceScores: Record<string, { confidence: string; rationale: string }> = {};
@@ -479,7 +391,7 @@ class MarketingCopyAgent {
         confidenceFactors.push("High-quality web source");
       } else if (trend.source === "reddit") {
         const score = (trend as any).score || 0;
-        if (score > 100) {
+        if (score > THRESHOLDS.redditHighEngagement) {
           confidenceFactors.push("High Reddit engagement");
         } else {
           confidenceFactors.push("Moderate Reddit engagement");
@@ -487,7 +399,7 @@ class MarketingCopyAgent {
       }
 
       const evidenceCount = (trend.key_evidence || []).length;
-      if (evidenceCount >= 2) {
+      if (evidenceCount >= THRESHOLDS.minEvidenceForHighConfidence) {
         confidenceFactors.push("Multiple supporting sources");
         confidenceValue = "High";
       } else if (evidenceCount === 1) {
@@ -505,38 +417,20 @@ class MarketingCopyAgent {
 
     // Get persona context
     const persona = state.persona;
-    const personaContext = persona && PERSONA_DESCRIPTIONS[persona] 
-      ? `\n\nPersona Context:\n${PERSONA_DESCRIPTIONS[persona]}\n\nWhen analyzing trends, prioritize those that align with this persona's goals and audience.`
-      : "";
+    const personaContext = getPersonaContext(persona);
 
     // Generate formatted report
-    const reportPrompt = `
-      Create a comprehensive research report based on these trends for: ${query}
-      
-      Scope: ${JSON.stringify(scope)}${personaContext}
-      
-      Trends to include (top ${topTrends.length}):
-      ${JSON.stringify(topTrends.map(t => ({ title: t.title, summary: t.summary, url: t.url })), null, 2)}
-      
-      Format the report as:
-      # Research Report: ${query}
-      
-      ## Top Trends
-      
-      For each trend, include:
-      - **Title**: [trend title]
-      - **Summary**: [1-2 sentence summary]
-      - **Why it matters**: [why this trend is relevant${persona ? ` for the ${persona} persona` : ""}]
-      - **Key Links**: [supporting URLs]
-      - **Timestamp**: [when this was published/found]
-      - **Confidence**: [High/Medium/Low] - [rationale]
-      
-      Make it clear, reviewable, and actionable.
-    `;
+    const reportPrompt = PROMPTS.researchReport(
+      query,
+      scope,
+      topTrends.map(t => ({ title: t.title, summary: t.summary, url: t.url })),
+      persona
+    );
 
-    const systemMessage = persona && PERSONA_DESCRIPTIONS[persona]
-      ? `You are a research report writer specialized in creating reports for ${persona}s. ${PERSONA_DESCRIPTIONS[persona]} Create clear, structured, reviewable reports that align with this persona's goals.`
-      : "You are a research report writer. Create clear, structured, reviewable reports.";
+    const systemMessage = SYSTEM_MESSAGES.researchReportWriter(
+      persona,
+      persona ? PERSONA_DESCRIPTIONS[persona] : undefined
+    );
 
     const messages = [
       new SystemMessage(systemMessage),
@@ -576,29 +470,15 @@ class MarketingCopyAgent {
     const persona = state.persona;
 
     const ideas: Record<string, string[]> = {};
-    const personaContext = persona && PERSONA_DESCRIPTIONS[persona] 
-      ? `\n\n${PERSONA_DESCRIPTIONS[persona]}\n\nGenerate copy that authentically reflects this persona's voice, goals, and target audience.`
-      : "";
 
     for (const platform of platforms) {
-      const platformPrompt = `
-        Based on this research:
-        ${research}
-        
-        Generate 5 creative marketing copy ideas for ${platform} that:
-        - Are platform-appropriate (consider character limits, tone, format)
-        - Incorporate the research insights
-        - Are engaging and action-oriented
-        - Align with current trends${personaContext}
-        
-        Original query: ${query}
-        
-        Return as a JSON array of strings, each string being one idea.
-      `;
+      const platformPrompt = PROMPTS.platformCopyGeneration(research, platform, query, persona);
 
-      const systemMessage = persona && PERSONA_DESCRIPTIONS[persona]
-        ? `You are a ${platform} marketing copy expert specialized in creating content for ${persona}s. ${PERSONA_DESCRIPTIONS[persona]} Generate creative, platform-specific copy ideas that authentically reflect this persona.`
-        : `You are a ${platform} marketing copy expert. Generate creative, platform-specific copy ideas.`;
+      const systemMessage = SYSTEM_MESSAGES.marketingCopyExpert(
+        platform,
+        persona,
+        persona ? PERSONA_DESCRIPTIONS[persona] : undefined
+      );
 
       const messages = [
         new SystemMessage(systemMessage),
@@ -613,7 +493,7 @@ class MarketingCopyAgent {
         const jsonMatch = ideasText.match(/\[.*?\]/s);
         if (jsonMatch) {
           ideasList = JSON.parse(jsonMatch[0]);
-          ideasList = ideasList.map((idea: any) => String(idea).trim().replace(/^["']|["']$/g, "")).filter((idea: string) => idea.length > 10);
+          ideasList = ideasList.map((idea: any) => String(idea).trim().replace(/^["']|["']$/g, "")).filter((idea: string) => idea.length > THRESHOLDS.minIdeaLength);
         } else {
           // Fallback: split by lines
           ideasList = ideasText
@@ -621,12 +501,12 @@ class MarketingCopyAgent {
             .map(line => line.trim())
             .filter(line => line && !line.startsWith("```") && !line.startsWith("#") && !["[", "]", "{", "}"].includes(line))
             .map(line => line.replace(/^["']|["']$/g, "").replace(/,$/, "").trim())
-            .filter(line => line.length > 10);
+            .filter(line => line.length > THRESHOLDS.minIdeaLength);
         }
-        ideas[platform] = ideasList.slice(0, 5);
+        ideas[platform] = ideasList.slice(0, THRESHOLDS.maxIdeasPerPlatform);
       } catch (error) {
         console.error(`Error parsing ideas for ${platform}:`, error);
-        ideas[platform] = [ideasText.substring(0, 200)];
+        ideas[platform] = [ideasText.substring(0, THRESHOLDS.fallbackTextLength)];
       }
     }
 
@@ -647,71 +527,15 @@ class MarketingCopyAgent {
     yield {
       type: "step",
       step: "fast_research",
-      message: "Generating research report (Fast mode)..."
+      message: USER_MESSAGES.fastResearch
     };
 
-    const personaContext = persona && PERSONA_DESCRIPTIONS[persona] 
-      ? `\n\nPersona Context:\n${PERSONA_DESCRIPTIONS[persona]}\n\nWhen generating trends and insights, prioritize those that align with this persona's goals and audience.`
-      : "";
+    const researchPrompt = PROMPTS.fastModeResearch(query, platforms, persona);
 
-    const researchPrompt = `
-      You are a marketing research expert. Generate a comprehensive research report for the following query:
-      
-      Query: ${query}
-      Target Platforms: ${platforms.join(", ")}${personaContext}
-      
-      Generate a complete research report that includes:
-      
-      1. A formatted research report (markdown format) with:
-         - Title: Research Report: [query]
-         - Top 5-10 trending topics relevant to the query
-         - For each topic, include:
-           * Title
-           * Summary (1-2 sentences)
-           * Why it matters for marketing
-           * Key supporting links/URLs (you can create realistic example URLs or use general domain patterns)
-           * Timestamp (recent dates within the last 30 days)
-           * Confidence level (High/Medium/Low) with rationale
-      
-      2. A JSON object with the following structure:
-      {
-        "research_report": "[the full markdown research report]",
-        "sources": ["list of source URLs"],
-        "trending_topics": [
-          {
-            "topic": "topic title",
-            "reason": "why it matters",
-            "url": "source URL",
-            "timestamp": "ISO timestamp",
-            "confidence": "High/Medium/Low"
-          }
-        ],
-        "enriched_trends": [
-          {
-            "title": "trend title",
-            "summary": "1-2 sentence summary",
-            "why_it_matters": "marketing relevance",
-            "url": "source URL",
-            "published_date": "ISO timestamp",
-            "source": "web",
-            "key_evidence": ["list of supporting URLs"]
-          }
-        ],
-        "confidence_scores": {
-          "trend_0": {
-            "confidence": "High/Medium/Low",
-            "rationale": "reasoning for confidence level"
-          }
-        }
-      }
-      
-      Make the research relevant, actionable, and based on current marketing trends. 
-      Generate realistic but relevant trends that would be useful for creating marketing copy.
-    `;
-
-    const systemMessage = persona && PERSONA_DESCRIPTIONS[persona]
-      ? `You are an expert marketing researcher specialized in creating reports for ${persona}s. ${PERSONA_DESCRIPTIONS[persona]} Generate comprehensive, actionable research reports with structured data that align with this persona's goals.`
-      : "You are an expert marketing researcher. Generate comprehensive, actionable research reports with structured data.";
+    const systemMessage = SYSTEM_MESSAGES.marketingResearcher(
+      persona,
+      persona ? PERSONA_DESCRIPTIONS[persona] : undefined
+    );
 
     const messages = [
       new SystemMessage(systemMessage),
@@ -740,7 +564,7 @@ class MarketingCopyAgent {
         researchReport = responseText;
         const urlPattern = /https?:\/\/[^\s\)]+/g;
         sources = Array.from(new Set(responseText.match(urlPattern) || []));
-        trendingTopics = sources.slice(0, 5).map((url, i) => ({
+        trendingTopics = sources.slice(0, THRESHOLDS.fallbackTrendCount).map((url, i) => ({
           topic: `Trend ${i + 1}`,
           reason: "Relevant trend identified in research",
           url,
@@ -799,7 +623,7 @@ class MarketingCopyAgent {
 
     yield {
       type: "approval_required",
-      message: "Research complete. Waiting for your approval to proceed.",
+      message: USER_MESSAGES.approvalRequired,
       research: researchReport,
       research_report: researchReport,
       sources,
@@ -838,7 +662,7 @@ class MarketingCopyAgent {
       ideas: {},
       currentStep: "starting",
       sessionId,
-      scope: { time_window: "last 30 days", region: "global", domain: "general" },
+      scope: { ...DEFAULT_SCOPE },
       toolsToUse: [],
       trendCandidates: [],
       enrichedTrends: [],
@@ -853,7 +677,7 @@ class MarketingCopyAgent {
     yield {
       type: "step",
       step: "research_plan",
-      message: "Clarifying research scope and selecting tools..."
+      message: USER_MESSAGES.researchPlan
     };
 
     // Execute the graph up to research_plan node
@@ -873,7 +697,7 @@ class MarketingCopyAgent {
     yield {
       type: "step",
       step: "trend_retrieval",
-      message: "Fetching trend candidates and enriching with sources..."
+      message: USER_MESSAGES.trendRetrieval
     };
 
     const retrievalResult = await this.trendRetrievalNode(state);
@@ -901,7 +725,7 @@ class MarketingCopyAgent {
     yield {
       type: "step",
       step: "research_report",
-      message: "Synthesizing research report..."
+      message: USER_MESSAGES.researchReport
     };
 
     const reportResult = await this.researchReportNode(state);
@@ -926,7 +750,7 @@ class MarketingCopyAgent {
 
     yield {
       type: "approval_required",
-      message: "Research complete. Waiting for your approval to proceed.",
+      message: USER_MESSAGES.approvalRequired,
       research: state.research,
       research_report: state.researchReport,
       sources: state.sources,
@@ -946,22 +770,15 @@ class MarketingCopyAgent {
     // Approval data will be retrieved from database in the action handler
 
     const ideas: Record<string, string[]> = {};
-    const personaContext = persona && PERSONA_DESCRIPTIONS[persona] 
-      ? `\n\n${PERSONA_DESCRIPTIONS[persona]}\n\nGenerate copy that authentically reflects this persona's voice, goals, and target audience.`
-      : "";
 
     for (const platform of platforms) {
-      const platformPrompt = `
-        Based on this research:
-        ${research}
-        
-        Generate 5 creative marketing copy ideas for ${platform}.${personaContext}
-        Return as a JSON array of strings.
-      `;
+      const platformPrompt = PROMPTS.platformCopyGenerationSimple(research, platform, persona);
 
-      const systemMessage = persona && PERSONA_DESCRIPTIONS[persona]
-        ? `You are a ${platform} marketing copy expert specialized in creating content for ${persona}s. ${PERSONA_DESCRIPTIONS[persona]}`
-        : `You are a ${platform} marketing copy expert.`;
+      const systemMessage = SYSTEM_MESSAGES.marketingCopyExpertSimple(
+        platform,
+        persona,
+        persona ? PERSONA_DESCRIPTIONS[persona] : undefined
+      );
 
       const messages = [
         new SystemMessage(systemMessage),
@@ -981,7 +798,7 @@ class MarketingCopyAgent {
         
         const parsed = JSON.parse(cleanedText);
         if (Array.isArray(parsed)) {
-          ideasList = parsed.map((idea: any) => String(idea).trim()).filter((idea: string) => idea.length > 10);
+          ideasList = parsed.map((idea: any) => String(idea).trim()).filter((idea: string) => idea.length > THRESHOLDS.minIdeaLength);
         }
       } catch (error) {
         ideasList = ideasText
@@ -989,11 +806,11 @@ class MarketingCopyAgent {
           .map(line => line.trim())
           .filter(line => line && !line.startsWith("#") && !line.startsWith("```") && !["[", "]", "{", "}"].includes(line))
           .map(line => line.trim())
-          .filter(line => line.length > 10);
+          .filter(line => line.length > THRESHOLDS.minIdeaLength);
       }
 
-      ideas[platform] = ideasList.slice(0, 5).filter((idea: string) => 
-        idea && idea.length > 10 && 
+      ideas[platform] = ideasList.slice(0, THRESHOLDS.maxIdeasPerPlatform).filter((idea: string) => 
+        idea && idea.length > THRESHOLDS.minIdeaLength && 
         !idea.startsWith("```") && 
         idea !== "```json" && 
         idea !== "```"
@@ -1053,7 +870,7 @@ export const generateIdeas = action({
           trendingTopics: event.trending_topics,
           enrichedTrends: event.enriched_trends,
           confidenceScores: event.confidence_scores,
-          scope: { time_window: "last 30 days", region: "global", domain: "general" },
+          scope: { ...DEFAULT_SCOPE },
           platforms: args.platforms,
           originalQuery: args.query,
           persona: args.persona,
@@ -1138,7 +955,7 @@ export const approveResearch = action({
             trendingTopics: event.trending_topics,
             enrichedTrends: event.enriched_trends,
             confidenceScores: event.confidence_scores,
-            scope: approvalData.scope || { time_window: "last 30 days", region: "global", domain: "general" },
+            scope: approvalData.scope || { ...DEFAULT_SCOPE },
             platforms: approvalData.platforms,
             originalQuery: newQuery,
             persona: approvalData.persona,
