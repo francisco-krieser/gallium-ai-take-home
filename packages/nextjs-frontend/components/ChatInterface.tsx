@@ -17,6 +17,7 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
   const [input, setInput] = useState('')
   const [platforms, setPlatforms] = useState(['LinkedIn', 'X', 'Instagram'])
   const [mode, setMode] = useState<'fast' | 'deep'>('deep')
+  const [persona, setPersona] = useState<'author' | 'founder'>('author')
   const [isGenerating, setIsGenerating] = useState(false)
   const [showApproval, setShowApproval] = useState(false)
   const [approvalData, setApprovalData] = useState<any>(null)
@@ -37,6 +38,13 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  // Load persona from session if available
+  useEffect(() => {
+    if (session?.persona) {
+      setPersona(session.persona)
+    }
+  }, [session?.persona])
 
   // Debug: log messages when they change
   useEffect(() => {
@@ -64,6 +72,7 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
         sessionId,
         query: input,
         platforms,
+        persona: persona,
       })
 
       // Call Convex action to generate ideas
@@ -71,6 +80,7 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
         query: input,
         platforms,
         sessionId,
+        persona: persona,
         mode: mode,
       })
     } catch (error) {
@@ -223,20 +233,27 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
       {/* Input */}
       {(!showApproval || session?.status === 'complete' || session?.status === 'researching') && (
         <div className="border-t bg-white px-6 py-4 flex-shrink-0">
-          <form onSubmit={handleSubmit} className="flex gap-2">
-            <div className="flex-1">
-              <input
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Enter your marketing query..."
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                disabled={isGenerating}
-              />
-            </div>
-            <div className="flex gap-2 items-center">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+            {/* Controls Row */}
+            <div className="flex gap-2 items-center flex-wrap">
+              {/* Persona Selector */}
+              <div className="flex items-center gap-2">
+                <label className="text-sm font-medium text-gray-700">Persona:</label>
+                <select
+                  value={persona}
+                  onChange={(e) => setPersona(e.target.value as 'author' | 'founder')}
+                  disabled={isGenerating}
+                  className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="author">Author</option>
+                  <option value="founder">Founder</option>
+                </select>
+              </div>
+              
               {/* Mode Toggle */}
-              <div className="flex gap-1 px-3 py-2 border border-gray-300 rounded-lg bg-white">
+              <div className="flex items-center gap-2">
+                <label className="text-sm font-medium text-gray-700">Mode:</label>
+                <div className="flex gap-1 px-3 py-2 border border-gray-300 rounded-lg bg-white">
                 <label className="flex items-center gap-1 text-sm cursor-pointer">
                   <input
                     type="radio"
@@ -262,6 +279,9 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
                   <span>Deep</span>
                 </label>
               </div>
+              </div>
+              
+              {/* Platform Checkboxes */}
               <div className="flex gap-2 px-3 py-2 border border-gray-300 rounded-lg bg-white">
                 {['LinkedIn', 'X', 'Instagram', 'Facebook', 'TikTok'].map((platform) => (
                   <label key={platform} className="flex items-center gap-1 text-sm cursor-pointer">
@@ -282,6 +302,8 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
                   </label>
                 ))}
               </div>
+              
+              {/* Submit Button */}
               <button
                 type="submit"
                 disabled={!input.trim() || isGenerating}
@@ -298,6 +320,18 @@ export function ChatInterface({ sessionId }: ChatInterfaceProps) {
                   <Send className="w-5 h-5" />
                 )}
               </button>
+            </div>
+            
+            {/* Input Text Row */}
+            <div className="flex-1">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="Enter your marketing query..."
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={isGenerating}
+              />
             </div>
           </form>
         </div>

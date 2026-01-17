@@ -6,6 +6,7 @@ export const createSession = mutation({
     sessionId: v.string(),
     query: v.string(),
     platforms: v.array(v.string()),
+    persona: v.optional(v.union(v.literal("author"), v.literal("founder"))),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -13,6 +14,7 @@ export const createSession = mutation({
       sessionId: args.sessionId,
       query: args.query,
       platforms: args.platforms,
+      persona: args.persona,
       status: "researching",
       createdAt: now,
       updatedAt: now,
@@ -165,6 +167,7 @@ export const storePendingApproval = mutation({
     scope: v.optional(v.any()),
     platforms: v.array(v.string()),
     originalQuery: v.string(),
+    persona: v.optional(v.union(v.literal("author"), v.literal("founder"))),
     mode: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -184,6 +187,7 @@ export const storePendingApproval = mutation({
       scope: args.scope,
       platforms: args.platforms,
       originalQuery: args.originalQuery,
+      persona: args.persona,
       mode: args.mode,
       approved: false,
       needsRefinement: false,

@@ -22,10 +22,30 @@ if (typeof globalThis.performance === "undefined") {
   } as any;
 }
 
+// Persona definitions
+const PERSONA_DESCRIPTIONS: Record<string, string> = {
+  author: `You are an author who's also a short-form content creator trying to sell your book. Your persona:
+- Focuses on storytelling, personal brand, and engaging narratives
+- Creates short-form content (TikTok, Instagram Reels, YouTube Shorts)
+- Promotes books through compelling stories and personal connection
+- Uses emotional hooks, relatable experiences, and narrative-driven content
+- Targets readers and book lovers through authentic, personal content
+- Emphasizes the journey, transformation, and human elements of your story`,
+
+  founder: `You are a founder who loves to post on LinkedIn/X to promote your product. Your persona:
+- Focuses on thought leadership, product promotion, and professional networking
+- Creates B2B marketing content for LinkedIn and X (Twitter)
+- Shares industry insights, product updates, and entrepreneurial wisdom
+- Uses data-driven insights, case studies, and professional expertise
+- Targets other founders, professionals, and potential customers
+- Emphasizes value proposition, business outcomes, and industry trends`
+};
+
 // Types matching the Python AgentState
 interface AgentState {
   query: string;
   platforms: string[];
+  persona?: "author" | "founder";
   research: string;
   sources: string[];
   trendingTopics: Array<{
@@ -483,11 +503,17 @@ class MarketingCopyAgent {
       };
     }
 
+    // Get persona context
+    const persona = state.persona;
+    const personaContext = persona && PERSONA_DESCRIPTIONS[persona] 
+      ? `\n\nPersona Context:\n${PERSONA_DESCRIPTIONS[persona]}\n\nWhen analyzing trends, prioritize those that align with this persona's goals and audience.`
+      : "";
+
     // Generate formatted report
     const reportPrompt = `
       Create a comprehensive research report based on these trends for: ${query}
       
-      Scope: ${JSON.stringify(scope)}
+      Scope: ${JSON.stringify(scope)}${personaContext}
       
       Trends to include (top ${topTrends.length}):
       ${JSON.stringify(topTrends.map(t => ({ title: t.title, summary: t.summary, url: t.url })), null, 2)}
@@ -500,7 +526,7 @@ class MarketingCopyAgent {
       For each trend, include:
       - **Title**: [trend title]
       - **Summary**: [1-2 sentence summary]
-      - **Why it matters**: [why this trend is relevant]
+      - **Why it matters**: [why this trend is relevant${persona ? ` for the ${persona} persona` : ""}]
       - **Key Links**: [supporting URLs]
       - **Timestamp**: [when this was published/found]
       - **Confidence**: [High/Medium/Low] - [rationale]
@@ -508,8 +534,12 @@ class MarketingCopyAgent {
       Make it clear, reviewable, and actionable.
     `;
 
+    const systemMessage = persona && PERSONA_DESCRIPTIONS[persona]
+      ? `You are a research report writer specialized in creating reports for ${persona}s. ${PERSONA_DESCRIPTIONS[persona]} Create clear, structured, reviewable reports that align with this persona's goals.`
+      : "You are a research report writer. Create clear, structured, reviewable reports.";
+
     const messages = [
-      new SystemMessage("You are a research report writer. Create clear, structured, reviewable reports."),
+      new SystemMessage(systemMessage),
       new HumanMessage(reportPrompt)
     ];
 
@@ -543,8 +573,12 @@ class MarketingCopyAgent {
     const platforms = state.platforms;
     const research = state.researchReport || state.research || "";
     const query = state.query;
+    const persona = state.persona;
 
     const ideas: Record<string, string[]> = {};
+    const personaContext = persona && PERSONA_DESCRIPTIONS[persona] 
+      ? `\n\n${PERSONA_DESCRIPTIONS[persona]}\n\nGenerate copy that authentically reflects this persona's voice, goals, and target audience.`
+      : "";
 
     for (const platform of platforms) {
       const platformPrompt = `
@@ -555,15 +589,19 @@ class MarketingCopyAgent {
         - Are platform-appropriate (consider character limits, tone, format)
         - Incorporate the research insights
         - Are engaging and action-oriented
-        - Align with current trends
+        - Align with current trends${personaContext}
         
         Original query: ${query}
         
         Return as a JSON array of strings, each string being one idea.
       `;
 
+      const systemMessage = persona && PERSONA_DESCRIPTIONS[persona]
+        ? `You are a ${platform} marketing copy expert specialized in creating content for ${persona}s. ${PERSONA_DESCRIPTIONS[persona]} Generate creative, platform-specific copy ideas that authentically reflect this persona.`
+        : `You are a ${platform} marketing copy expert. Generate creative, platform-specific copy ideas.`;
+
       const messages = [
-        new SystemMessage(`You are a ${platform} marketing copy expert. Generate creative, platform-specific copy ideas.`),
+        new SystemMessage(systemMessage),
         new HumanMessage(platformPrompt)
       ];
 
@@ -603,7 +641,8 @@ class MarketingCopyAgent {
     query: string,
     platforms: string[],
     sessionId: string,
-    mode: string = "fast"
+    mode: string = "fast",
+    persona?: "author" | "founder"
   ): AsyncGenerator<any, void, unknown> {
     yield {
       type: "step",
@@ -611,11 +650,15 @@ class MarketingCopyAgent {
       message: "Generating research report (Fast mode)..."
     };
 
+    const personaContext = persona && PERSONA_DESCRIPTIONS[persona] 
+      ? `\n\nPersona Context:\n${PERSONA_DESCRIPTIONS[persona]}\n\nWhen generating trends and insights, prioritize those that align with this persona's goals and audience.`
+      : "";
+
     const researchPrompt = `
       You are a marketing research expert. Generate a comprehensive research report for the following query:
       
       Query: ${query}
-      Target Platforms: ${platforms.join(", ")}
+      Target Platforms: ${platforms.join(", ")}${personaContext}
       
       Generate a complete research report that includes:
       
@@ -666,8 +709,12 @@ class MarketingCopyAgent {
       Generate realistic but relevant trends that would be useful for creating marketing copy.
     `;
 
+    const systemMessage = persona && PERSONA_DESCRIPTIONS[persona]
+      ? `You are an expert marketing researcher specialized in creating reports for ${persona}s. ${PERSONA_DESCRIPTIONS[persona]} Generate comprehensive, actionable research reports with structured data that align with this persona's goals.`
+      : "You are an expert marketing researcher. Generate comprehensive, actionable research reports with structured data.";
+
     const messages = [
-      new SystemMessage("You are an expert marketing researcher. Generate comprehensive, actionable research reports with structured data."),
+      new SystemMessage(systemMessage),
       new HumanMessage(researchPrompt)
     ];
 
@@ -767,10 +814,11 @@ class MarketingCopyAgent {
     platforms: string[],
     sessionId: string,
     isRefinement: boolean = false,
-    mode: string = "deep"
+    mode: string = "deep",
+    persona?: "author" | "founder"
   ): AsyncGenerator<any, void, unknown> {
     if (mode === "fast") {
-      yield* this.runFastMode(query, platforms, sessionId, mode);
+      yield* this.runFastMode(query, platforms, sessionId, mode, persona);
       return;
     }
 
@@ -781,6 +829,7 @@ class MarketingCopyAgent {
     let state: AgentState = {
       query,
       platforms,
+      persona,
       research: "",
       sources: [],
       trendingTopics: [],
@@ -891,23 +940,31 @@ class MarketingCopyAgent {
     sessionId: string,
     research: string,
     platforms: string[],
+    persona?: "author" | "founder",
     ctx?: any
   ): AsyncGenerator<any, void, unknown> {
     // Approval data will be retrieved from database in the action handler
 
     const ideas: Record<string, string[]> = {};
+    const personaContext = persona && PERSONA_DESCRIPTIONS[persona] 
+      ? `\n\n${PERSONA_DESCRIPTIONS[persona]}\n\nGenerate copy that authentically reflects this persona's voice, goals, and target audience.`
+      : "";
 
     for (const platform of platforms) {
       const platformPrompt = `
         Based on this research:
         ${research}
         
-        Generate 5 creative marketing copy ideas for ${platform}.
+        Generate 5 creative marketing copy ideas for ${platform}.${personaContext}
         Return as a JSON array of strings.
       `;
 
+      const systemMessage = persona && PERSONA_DESCRIPTIONS[persona]
+        ? `You are a ${platform} marketing copy expert specialized in creating content for ${persona}s. ${PERSONA_DESCRIPTIONS[persona]}`
+        : `You are a ${platform} marketing copy expert.`;
+
       const messages = [
-        new SystemMessage(`You are a ${platform} marketing copy expert.`),
+        new SystemMessage(systemMessage),
         new HumanMessage(platformPrompt)
       ];
 
@@ -962,6 +1019,7 @@ export const generateIdeas = action({
     query: v.string(),
     platforms: v.array(v.string()),
     sessionId: v.string(),
+    persona: v.optional(v.union(v.literal("author"), v.literal("founder"))),
     mode: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -970,13 +1028,14 @@ export const generateIdeas = action({
       sessionId: args.sessionId,
       query: args.query,
       platforms: args.platforms,
+      persona: args.persona,
     });
 
     const agent = new MarketingCopyAgent();
     let lastResearchComplete: any = null;
 
     // Process all events and update Convex state
-    for await (const event of agent.runStream(args.query, args.platforms, args.sessionId, false, args.mode || "deep")) {
+    for await (const event of agent.runStream(args.query, args.platforms, args.sessionId, false, args.mode || "deep", args.persona)) {
       // Update Convex state as events come in
       await ctx.runMutation(api.streamHandler.handleStreamEvent, {
         sessionId: args.sessionId,
@@ -997,6 +1056,7 @@ export const generateIdeas = action({
           scope: { time_window: "last 30 days", region: "global", domain: "general" },
           platforms: args.platforms,
           originalQuery: args.query,
+          persona: args.persona,
           mode: args.mode || "deep",
         });
       }
@@ -1034,7 +1094,8 @@ export const approveResearch = action({
       for await (const event of agent.continueAfterApproval(
         args.sessionId,
         approvalData.research || approvalData.researchReport || "",
-        approvalData.platforms
+        approvalData.platforms,
+        approvalData.persona
       )) {
         await ctx.runMutation(api.streamHandler.handleStreamEvent, {
           sessionId: args.sessionId,
@@ -1059,7 +1120,8 @@ export const approveResearch = action({
         approvalData.platforms,
         args.sessionId,
         true,
-        mode
+        mode,
+        approvalData.persona
       )) {
         await ctx.runMutation(api.streamHandler.handleStreamEvent, {
           sessionId: args.sessionId,
@@ -1079,6 +1141,7 @@ export const approveResearch = action({
             scope: approvalData.scope || { time_window: "last 30 days", region: "global", domain: "general" },
             platforms: approvalData.platforms,
             originalQuery: newQuery,
+            persona: approvalData.persona,
             mode: mode,
           });
         }

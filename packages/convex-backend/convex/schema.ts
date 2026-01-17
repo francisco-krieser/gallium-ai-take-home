@@ -6,6 +6,7 @@ export default defineSchema({
     sessionId: v.string(),
     query: v.string(),
     platforms: v.array(v.string()),
+    persona: v.optional(v.union(v.literal("author"), v.literal("founder"))),
     research: v.optional(v.string()),
     sources: v.optional(v.array(v.string())),
     trendingTopics: v.optional(v.array(v.object({
@@ -60,6 +61,7 @@ export default defineSchema({
     scope: v.optional(v.any()),
     platforms: v.array(v.string()),
     originalQuery: v.string(),
+    persona: v.optional(v.union(v.literal("author"), v.literal("founder"))),
     mode: v.optional(v.string()),
     approved: v.optional(v.boolean()),
     needsRefinement: v.optional(v.boolean()),
