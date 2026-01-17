@@ -1,0 +1,59 @@
+{
+  "x": [
+    "sproutsocial.com",
+    "socialmediatoday.com",
+    "socialrails.com",
+    "buffer.com",
+    "hootsuite.com",
+    "later.com",
+    "twitter.com/i/trends"
+  ],
+  "linkedin": [
+    "metricool.com",
+    "socialmediatoday.com",
+    "sproutsocial.com",
+    "socialrails.com",
+    "buffer.com",
+    "hootsuite.com",
+    "linkedin.com/pulse"
+  ],
+  "instagram": [
+    "sproutsocial.com",
+    "socialmediatoday.com",
+    "socialrails.com",
+    "later.com",
+    "buffer.com",
+    "hootsuite.com",
+    "creatormarketplace.instagram.com"
+  ],
+  "tiktok": [
+    "sproutsocial.com",
+    "socialmediatoday.com",
+    "voguebusiness.com",
+    "later.com",
+    "buffer.com",
+    "hootsuite.com"
+  ],
+  "pinterest": [
+    "pinterest.com",
+    "socialmediatoday.com",
+    "sproutsocial.com",
+    "buffer.com",
+    "hootsuite.com"
+  ],
+  "facebook": [
+    "sproutsocial.com",
+    "socialmediatoday.com",
+    "socialrails.com",
+    "buffer.com",
+    "hootsuite.com"
+  ],
+  "youtube": [
+    "sproutsocial.com",
+    "socialmediatoday.com",
+    "socialrails.com",
+    "buffer.com",
+    "hootsuite.com",
+    "youtube.com/trending"
+  ]
+}
